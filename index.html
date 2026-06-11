@@ -299,7 +299,7 @@
 <div id="hotbar"></div>
 <div id="weaponchip"></div>
 <div id="bossbar">
-  <div class="bname"><span>👑 古代ゴーレム</span><span class="bstate">PASSIVE</span></div>
+  <div class="bname"><span id="bossName">👑 古代ゴーレム</span><span class="bstate">PASSIVE</span></div>
   <div class="bwrap"><div class="bfill"></div></div>
 </div>
 <div id="touchui">
@@ -695,6 +695,14 @@ function groundAt(x, z, fromY = H - 2) {
     if (isSolid(getBlock(fx, y, fz))) return y + 1;
   return 0;
 }
+function groundAtL(x, z, fromY = H - 2) { // 溶岩も床として扱う（マグマスライム用）
+  const fx = Math.floor(x), fz = Math.floor(z);
+  for (let y = Math.min(Math.floor(fromY) + 2, H - 1); y >= 0; y--) {
+    const b = getBlock(fx, y, fz);
+    if (isSolid(b) || b === B.LAVA) return y + 1;
+  }
+  return 0;
+}
 
 /* ================= メッシュ生成 ================= */
 const FACES = [
@@ -1047,6 +1055,7 @@ document.getElementById('respawnBtn').addEventListener('click', () => {
   renderHearts();
   // ボスは鎮まり、全回復する
   if (boss) { boss.enraged = false; boss.hp = boss.maxHp; }
+  if (dragon) { dragon.enraged = false; dragon.hp = dragon.maxHp; dragon.pos.copy(dragon.home); }
   document.getElementById('deathPanel').classList.remove('show');
   if (IS_TOUCH) { playing = true; applyHud(); }
   else renderer.domElement.requestPointerLock();
@@ -1214,8 +1223,30 @@ const MOB_TYPES = {
     color: new THREE.Color(0x8a8f94),
     drops: () => [['core', 4], ['glow', 6], ['stone', 8]],
   },
+  // ---- マグマエリアの敵 ----
+  magma: {
+    name: 'マグマスライム', hp: 5, dmg: 2, speed: 4.0, radius: 0.7, aggroR: 12, cave: true,
+    color: new THREE.Color(0xff7a2a),
+    drops: () => Math.random() < 0.7 ? [['glow', 1]] : [],
+  },
+  bat: {
+    name: 'ファイアバット', hp: 3, dmg: 1, speed: 4.6, radius: 0.55, aggroR: 13, cave: true,
+    color: new THREE.Color(0xff9b3d),
+    drops: () => Math.random() < 0.3 ? [['glow', 1]] : [],
+  },
+  cinder: {
+    name: 'シンダーゴーレム', hp: 10, dmg: 3, speed: 1.7, radius: 0.75, aggroR: 11, cave: true,
+    color: new THREE.Color(0x53585f),
+    drops: () => Math.random() < 0.8 ? [['core', 1], ['stone', 2]] : [['stone', 2]],
+  },
+  dragon: {
+    name: 'マグマドラゴン', hp: 80, dmg: 5, speed: 4.4, radius: 2.0, aggroR: 0,
+    color: new THREE.Color(0xff5a1f),
+    drops: () => [['core', 6], ['glow', 10], ['stone', 10]],
+  },
 };
 let boss = null;
+let dragon = null;
 function buildMobMesh(type) {
   const g = new THREE.Group();
   const lam = (c, op) => {
@@ -1229,14 +1260,82 @@ function buildMobMesh(type) {
     mesh.userData.flashable = true;
     return mesh;
   };
-  if (type === 'slime') {
-    g.add(box(0.95, 0.8, 0.95, lam(0x4ade80, 0.72), 0, 0.4, 0));
-    g.add(box(0.5, 0.42, 0.5, lam(0x22c55e), 0, 0.36, 0));
-    const eye = new THREE.MeshBasicMaterial({ color: 0x0f172a });
+  const bas = (c) => new THREE.MeshBasicMaterial({ color: c });
+  if (type === 'slime' || type === 'magma') {
+    const mag = type === 'magma';
+    const outer = mag
+      ? new THREE.MeshBasicMaterial({ color: 0xff7a2a, transparent: true, opacity: 0.82 })
+      : lam(0x4ade80, 0.72);
+    const inner = mag ? bas(0xffc14d) : lam(0x22c55e);
+    const o = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.8, 0.95), outer);
+    o.position.set(0, 0.4, 0); g.add(o);
+    const ic = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.42, 0.5), inner);
+    ic.position.set(0, 0.36, 0); g.add(ic);
+    const eye = bas(0x1a0d08);
     const e1 = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.16, 0.06), eye);
     e1.position.set(-0.18, 0.52, 0.46);
     const e2 = e1.clone(); e2.position.x = 0.18;
     g.add(e1, e2);
+  } else if (type === 'bat') {
+    g.add(box(0.34, 0.3, 0.32, lam(0x241a1d), 0, 0.8, 0));
+    const e1 = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.07, 0.05), bas(0xffb23d));
+    e1.position.set(-0.09, 0.85, 0.17);
+    const e2 = e1.clone(); e2.position.x = 0.09;
+    g.add(e1, e2);
+    const wingL = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.34), bas(0xff7a2a));
+    wingL.position.set(-0.45, 0.85, 0);
+    const wingR = wingL.clone(); wingR.position.x = 0.45;
+    g.add(wingL, wingR);
+    g.userData.wings = { wingL, wingR };
+  } else if (type === 'cinder') {
+    const glowMats = [];
+    const gm = () => { const m = bas(0xff7a2a); glowMats.push(m); return m; };
+    g.add(box(0.72, 0.72, 0.62, lam(0x2f3338), 0, 0.86, 0));
+    g.add(box(0.5, 0.4, 0.5, lam(0x272b30), 0, 1.45, 0));
+    g.add(box(0.24, 0.5, 0.26, lam(0x272b30), -0.2, 0.25, 0));
+    g.add(box(0.24, 0.5, 0.26, lam(0x272b30), 0.2, 0.25, 0));
+    g.add(box(0.18, 0.62, 0.2, lam(0x2f3338), -0.5, 0.82, 0));
+    g.add(box(0.18, 0.62, 0.2, lam(0x2f3338), 0.5, 0.82, 0));
+    const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.03), gm()); c1.position.set(-0.12, 0.85, 0.33); g.add(c1);
+    const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.09, 0.03), gm()); c2.position.set(0.1, 0.95, 0.33); g.add(c2);
+    const e1 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 0.04), gm()); e1.position.set(-0.12, 1.5, 0.27); g.add(e1);
+    const e2 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 0.04), gm()); e2.position.set(0.12, 1.5, 0.27); g.add(e2);
+    g.userData.glowMats = glowMats;
+  } else if (type === 'dragon') {
+    // マグマドラゴン（頭が+z方向、スケール1.5倍で翼幅約8ブロック）
+    const glowMats = [];
+    const gm = (c) => { const m = bas(c); glowMats.push(m); return m; };
+    g.add(box(1.0, 0.95, 2.6, lam(0x4a383d), 0, 0, 0));                    // 胴体
+    const belly = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.1, 2.0), gm(0xff7a2a));
+    belly.position.set(0, -0.5, 0); g.add(belly);                          // 腹の溶岩線
+    const spine = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.08, 2.4), gm(0xff5a1f));
+    spine.position.set(0, 0.51, 0); g.add(spine);                          // 背の溶岩線
+    g.add(box(0.6, 0.6, 0.9, lam(0x4a383d), 0, 0.25, 1.6));               // 首
+    g.add(box(0.85, 0.65, 0.9, lam(0x554147), 0, 0.45, 2.35));            // 頭
+    g.add(box(0.5, 0.3, 0.55, lam(0x3a2c31), 0, 0.3, 2.9));               // 鼻先
+    g.add(box(0.16, 0.45, 0.16, lam(0x2d2226), -0.3, 0.95, 2.2));         // 角
+    g.add(box(0.16, 0.45, 0.16, lam(0x2d2226), 0.3, 0.95, 2.2));
+    const e1 = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.08), gm(0xffb23d));
+    e1.position.set(-0.32, 0.55, 2.62); g.add(e1);
+    const e2 = e1.clone(); e2.position.x = 0.32; g.add(e2);
+    g.add(box(0.55, 0.5, 1.3, lam(0x423338), 0, 0.05, -1.85));            // 尻尾
+    g.add(box(0.32, 0.3, 1.2, lam(0x3a2c31), 0, 0.1, -2.95));
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.08, 0.55), gm(0xff7a2a));
+    tip.position.set(0, 0.1, -3.6); g.add(tip);                           // 尾の先
+    const wingL = new THREE.Group();
+    const wl = box(2.3, 0.1, 1.5, lam(0x3f3035), -1.45, 0, 0); wingL.add(wl);
+    const wlEdge = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.06, 0.18), gm(0xff5a1f));
+    wlEdge.position.set(-1.45, 0, 0.75); wingL.add(wlEdge);
+    wingL.position.set(-0.5, 0.45, 0.3);
+    const wingR = new THREE.Group();
+    const wr = box(2.3, 0.1, 1.5, lam(0x3f3035), 1.45, 0, 0); wingR.add(wr);
+    const wrEdge = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.06, 0.18), gm(0xff5a1f));
+    wrEdge.position.set(1.45, 0, 0.75); wingR.add(wrEdge);
+    wingR.position.set(0.5, 0.45, 0.3);
+    g.add(wingL, wingR);
+    g.scale.setScalar(1.5);
+    g.userData.glowMats = glowMats;
+    g.userData.wings = { wingL, wingR };
   } else if (type === 'shadow') {
     g.add(box(0.68, 0.85, 0.55, lam(0x1e293b), 0, 0.85, 0));
     g.add(box(0.5, 0.45, 0.48, lam(0x0f172a), 0, 1.5, 0));
@@ -1282,7 +1381,7 @@ function buildMobMesh(type) {
   // HPバー（スプライトは常にカメラを向く）
   const barBg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0x0a0e1f, depthTest: false }));
   barBg.scale.set(0.95, 0.1, 1);
-  barBg.position.y = type === 'slime' ? 1.25 : type === 'boss' ? 4.3 : 2.3;
+  barBg.position.y = { slime: 1.25, magma: 1.25, bat: 1.5, cinder: 2.0, dragon: 2.4, boss: 4.3 }[type] || 2.3;
   barBg.renderOrder = 10;
   const barFg = new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xf43f5e, depthTest: false }));
   barFg.scale.set(0.9, 0.06, 1);
@@ -1322,6 +1421,45 @@ function spawnBoss() {
   }
   boss = spawnMobAt('boss', spawnPoint.x + 60, spawnPoint.z); // 保険
 }
+function spawnDragon() {
+  if (dragon) return;
+  // 溶岩が多く天井の開けた大空洞を探す
+  let best = null, bestC = -1;
+  for (let r = 24; r <= 80; r += 8) for (let a = 0; a < 10; a++) {
+    const ang = (a / 10) * Math.PI * 2 + r * 0.37;
+    const x = Math.floor(spawnPoint.x + Math.cos(ang) * r);
+    const z = Math.floor(spawnPoint.z + Math.sin(ang) * r);
+    let c = 0;
+    for (let dx = -4; dx <= 4; dx += 2) for (let dz = -4; dz <= 4; dz += 2) {
+      if (getBlock(x + dx, 3, z + dz) === B.LAVA) c++;
+      if (getBlock(x + dx, 7, z + dz) === B.AIR) c++;
+    }
+    if (c > bestC) { bestC = c; best = [x, z]; }
+  }
+  dragon = spawnMobAt('dragon', best[0] + 0.5, best[1] + 0.5);
+  dragon.pos.y = 7.6;
+  dragon.home = dragon.pos.clone();
+}
+function trySpawnCaveMob() {
+  let caveCount = 0;
+  for (const m of mobs) if (m.t.cave) caveCount++;
+  if (caveCount >= 8) return;
+  for (let i = 0; i < 12; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const dd = 9 + Math.random() * 16;
+    const fx = Math.floor(player.pos.x + Math.cos(a) * dd);
+    const fz = Math.floor(player.pos.z + Math.sin(a) * dd);
+    for (let y = 10; y >= 2; y--) {
+      if (getBlock(fx, y, fz) !== B.AIR) continue;
+      const below = getBlock(fx, y - 1, fz);
+      if (!isSolid(below) && below !== B.LAVA) continue;
+      const type = below === B.LAVA ? 'magma' : ['magma', 'bat', 'cinder'][(Math.random() * 3) | 0];
+      const mob = spawnMobAt(type, fx + 0.5, fz + 0.5);
+      mob.pos.set(fx + 0.5, y + (type === 'bat' ? 0.6 : 0), fz + 0.5);
+      return;
+    }
+  }
+}
 function trySpawnMob() {
   if (mobs.length >= 12) return;
   for (let i = 0; i < 10; i++) {
@@ -1341,14 +1479,15 @@ function hurtMob(mob, dmg, fromDir) {
   mob.hp -= dmg;
   mob.flashT = 1;
   blip(95, 0.08, 'sawtooth', 0.06, 0.7);
-  if (mob.type === 'boss' && !mob.enraged && mob.hp > 0) {
+  const isBossType = mob.type === 'boss' || mob.type === 'dragon';
+  if (isBossType && !mob.enraged && mob.hp > 0) {
     // 手を出すと激怒する
     mob.enraged = true;
-    toast('👑 <b>古代ゴーレム</b>が激怒した！');
+    toast(`${mob.type === 'dragon' ? '🐉' : '👑'} <b>${mob.t.name}</b>が激怒した！`);
     blip(60, 0.6, 'sawtooth', 0.1, 0.5);
     setTimeout(() => blip(45, 0.7, 'sawtooth', 0.09, 0.6), 200);
   }
-  if (fromDir && mob.type !== 'boss') {
+  if (fromDir && !isBossType) {
     mob.vel.x += fromDir.x * 6;
     mob.vel.z += fromDir.z * 6;
     if (mob.type === 'slime') mob.vel.y = 3.5;
@@ -1360,12 +1499,13 @@ function killMob(mob) {
   if (i < 0) return;
   mobs.splice(i, 1);
   scene.remove(mob.mesh);
-  if (mob.type === 'boss') {
-    boss = null;
+  if (mob.type === 'boss' || mob.type === 'dragon') {
+    if (mob.type === 'boss') boss = null;
+    else dragon = null;
     for (let j = 0; j < 3; j++)
       burst(mob.pos.x - 0.5, mob.pos.y + j * 1.2, mob.pos.z - 0.5, mob.t.color, 22);
     burst(mob.pos.x - 0.5, mob.pos.y + 1, mob.pos.z - 0.5, new THREE.Color(0x22d3ee), 20);
-    toast('🏆 <b>古代ゴーレム</b>を討伐した！');
+    toast(`🏆 <b>${mob.t.name}</b>を討伐した！`);
     blip(520, 0.15, 'sine', 0.07, 1.3);
     setTimeout(() => blip(660, 0.15, 'sine', 0.07, 1.2), 130);
     setTimeout(() => blip(880, 0.3, 'sine', 0.07, 1.0), 260);
@@ -1383,21 +1523,22 @@ function updateMobs(dt) {
     const mob = mobs[i];
     const t = mob.t;
     const d = mob.pos.distanceTo(playerCenter);
-    if (d > 80 && mob.type !== 'boss') { scene.remove(mob.mesh); mobs.splice(i, 1); continue; }
-    // ボスは攻撃されない限り襲ってこない（ポーズ中はどの敵も襲わない）
-    const aggro = mob.type === 'boss'
+    const isBossType = mob.type === 'boss' || mob.type === 'dragon';
+    if (d > (t.cave ? 55 : 80) && !isBossType) { scene.remove(mob.mesh); mobs.splice(i, 1); continue; }
+    // ボス級は攻撃されない限り襲ってこない（ポーズ中はどの敵も襲わない）
+    const aggro = isBossType
       ? (mob.enraged && !dead && playing)
       : (d < t.aggroR && !dead && playing);
     mob.flashT = Math.max(0, mob.flashT - dt * 4);
     mob.atkCd -= dt;
     mob.bobT += dt;
 
-    if (mob.type === 'slime') {
+    if (mob.type === 'slime' || mob.type === 'magma') {
       mob.vel.y -= 22 * dt;
       mob.pos.y += mob.vel.y * dt;
       mob.pos.x += mob.vel.x * dt;
       mob.pos.z += mob.vel.z * dt;
-      const g = groundAt(mob.pos.x, mob.pos.z, mob.pos.y);
+      const g = (mob.type === 'magma' ? groundAtL : groundAt)(mob.pos.x, mob.pos.z, mob.pos.y);
       if (mob.pos.y <= g) {
         mob.pos.y = g;
         mob.vel.set(0, 0, 0);
@@ -1441,6 +1582,90 @@ function updateMobs(dt) {
       mob.vel.multiplyScalar(Math.max(0, 1 - 4 * dt)); // ノックバック減衰
       const gy = groundAt(mob.pos.x, mob.pos.z, mob.pos.y) + 0.4 + Math.sin(mob.bobT * 2.2) * 0.22;
       mob.pos.y += (gy - mob.pos.y) * Math.min(1, 4 * dt);
+    } else if (mob.type === 'bat') {
+      // ファイアバット：飛び回り、急襲しては離脱する
+      mob.fleeT = Math.max(0, (mob.fleeT || 0) - dt);
+      let target;
+      if (aggro && mob.fleeT <= 0) target = playerCenter;
+      else if (mob.fleeT > 0) {
+        target = mob.pos.clone().sub(playerCenter).setLength(4).add(mob.pos);
+        target.y = mob.pos.y + 1.5;
+      } else {
+        mob.wanderT -= dt;
+        if (mob.wanderT <= 0) {
+          const a = Math.random() * Math.PI * 2;
+          mob.wanderDir.set(Math.cos(a), (Math.random() - 0.5) * 0.7, Math.sin(a));
+          mob.wanderT = 1.5 + Math.random() * 2;
+        }
+        target = mob.pos.clone().addScaledVector(mob.wanderDir, 3);
+      }
+      const dir = target.clone().sub(mob.pos);
+      if (dir.lengthSq() > 0.25) {
+        dir.normalize().multiplyScalar(t.speed * dt);
+        const cy = Math.floor(mob.pos.y + 0.8);
+        if (!isSolid(getBlock(Math.floor(mob.pos.x + dir.x), cy, Math.floor(mob.pos.z)))) mob.pos.x += dir.x;
+        if (!isSolid(getBlock(Math.floor(mob.pos.x), Math.floor(mob.pos.y + dir.y + 0.8), Math.floor(mob.pos.z)))) mob.pos.y += dir.y;
+        if (!isSolid(getBlock(Math.floor(mob.pos.x), cy, Math.floor(mob.pos.z + dir.z)))) mob.pos.z += dir.z;
+        if (!aggro) mob.mesh.rotation.y = Math.atan2(dir.x, dir.z);
+      }
+      const W = mob.mesh.userData.wings;
+      if (W) { const fl = Math.sin(mob.bobT * 18) * 0.9; W.wingL.rotation.z = fl; W.wingR.rotation.z = -fl; }
+    } else if (mob.type === 'cinder') {
+      // シンダーゴーレム：遅いが硬い。じわじわ迫る
+      if (aggro && d > 1.3) {
+        const dir = playerCenter.clone().sub(mob.pos).setY(0).normalize();
+        mob.pos.x += dir.x * t.speed * dt;
+        mob.pos.z += dir.z * t.speed * dt;
+      }
+      mob.pos.x += mob.vel.x * dt;
+      mob.pos.z += mob.vel.z * dt;
+      mob.vel.multiplyScalar(Math.max(0, 1 - 5 * dt));
+      const gy = groundAt(mob.pos.x, mob.pos.z, mob.pos.y + 1);
+      mob.pos.y += (gy - mob.pos.y) * Math.min(1, 10 * dt);
+      const gm = mob.mesh.userData.glowMats;
+      if (gm) {
+        const p = 0.7 + Math.sin(mob.bobT * 4) * 0.3;
+        for (const m of gm) m.color.setHex(0xff7a2a).multiplyScalar(p);
+      }
+    } else if (mob.type === 'dragon') {
+      // マグマドラゴン：溶岩湖の上を旋回。激怒すると追い回して火球を吐く
+      mob.swingT = Math.max(0, mob.swingT - dt);
+      const W = mob.mesh.userData.wings;
+      if (W) { const fl = Math.sin(mob.bobT * (aggro ? 7 : 4)) * 0.55; W.wingL.rotation.z = fl; W.wingR.rotation.z = -fl; }
+      const playerNearHome = playerCenter.distanceTo(mob.home) < 45;
+      if (aggro && playerNearHome) {
+        const target = playerCenter.clone(); target.y += 1.2;
+        const dir = target.sub(mob.pos);
+        if (dir.length() > 2.2) {
+          dir.normalize().multiplyScalar(t.speed * dt);
+          if (!isSolid(getBlock(Math.floor(mob.pos.x + dir.x), Math.floor(mob.pos.y), Math.floor(mob.pos.z)))) mob.pos.x += dir.x;
+          if (!isSolid(getBlock(Math.floor(mob.pos.x), Math.floor(mob.pos.y + dir.y), Math.floor(mob.pos.z)))) mob.pos.y += dir.y;
+          if (!isSolid(getBlock(Math.floor(mob.pos.x), Math.floor(mob.pos.y), Math.floor(mob.pos.z + dir.z)))) mob.pos.z += dir.z;
+        }
+        mob.fireCd = (mob.fireCd || 0) - dt;
+        if (mob.fireCd <= 0 && d < 22 && d > 3.5) {
+          shootFireball(mob);
+          mob.fireCd = 2.4;
+        }
+      } else {
+        // 悠然と旋回
+        mob.circA = (mob.circA || 0) + dt * 0.4;
+        const tx = mob.home.x + Math.cos(mob.circA) * 5.5;
+        const tz = mob.home.z + Math.sin(mob.circA) * 5.5;
+        const ty = mob.home.y + Math.sin(mob.bobT * 0.8) * 0.4;
+        const px = mob.pos.x, pz = mob.pos.z;
+        mob.pos.x += (tx - mob.pos.x) * Math.min(1, 2.5 * dt);
+        mob.pos.y += (ty - mob.pos.y) * Math.min(1, 2.5 * dt);
+        mob.pos.z += (tz - mob.pos.z) * Math.min(1, 2.5 * dt);
+        const vx = mob.pos.x - px, vz = mob.pos.z - pz;
+        if (vx * vx + vz * vz > 1e-7) mob.mesh.rotation.y = Math.atan2(vx, vz);
+      }
+      const gm = mob.mesh.userData.glowMats;
+      if (gm) {
+        const p = 0.75 + Math.sin(mob.bobT * (mob.enraged ? 9 : 2.5)) * 0.25;
+        const col = mob.enraged ? 0xff3b30 : 0xff7a2a;
+        for (const m of gm) m.color.setHex(col).multiplyScalar(p);
+      }
     } else {
       // ボス：激怒時のみ地上をのっしのっしと追ってくる
       mob.swingT = Math.max(0, mob.swingT - dt);
@@ -1476,21 +1701,23 @@ function updateMobs(dt) {
     }
 
     // プレイヤーへの攻撃
-    const atkRange = mob.type === 'boss' ? 3.4 : 1.7;
+    const atkRange = mob.type === 'boss' ? 3.4 : mob.type === 'dragon' ? 3.0 : 1.7;
     if (aggro && d < atkRange && mob.atkCd <= 0) {
       damagePlayer(t.dmg, mob.pos);
-      mob.atkCd = mob.type === 'boss' ? 1.5 : 1.1;
+      mob.atkCd = mob.type === 'boss' ? 1.5 : mob.type === 'dragon' ? 1.4 : 1.1;
       mob.swingT = 0.5;
-      if (mob.type === 'boss') blip(55, 0.25, 'sawtooth', 0.09, 0.6); // 地響き
+      if (isBossType) blip(55, 0.25, 'sawtooth', 0.09, 0.6); // 地響き
+      if (mob.type === 'bat') mob.fleeT = 1.3; // 急襲後は離脱
     }
 
     // メッシュ更新
     mob.mesh.position.copy(mob.pos);
     const ang = Math.atan2(playerCenter.x - mob.pos.x, playerCenter.z - mob.pos.z);
     if (aggro || (mob.type === 'boss' && d < 12)) mob.mesh.rotation.y = ang; // ボスは近づくと見つめてくる
+    const be = mob.type === 'dragon' ? 0.13 : 0; // ドラゴンは暗闇でも見えるよう微発光
     mob.mesh.traverse(o => {
       if (o.userData.flashable && o.material && o.material.emissive)
-        o.material.emissive.setRGB(mob.flashT * 0.9, mob.flashT * 0.1, mob.flashT * 0.15);
+        o.material.emissive.setRGB(be + mob.flashT * 0.9, be * 0.5 + mob.flashT * 0.1, be * 0.4 + mob.flashT * 0.15);
     });
     const showBar = (aggro || mob.hp < mob.maxHp) && d > 2.4; // 至近距離では非表示
     mob.mesh.userData.barBg.visible = showBar;
@@ -1500,6 +1727,42 @@ function updateMobs(dt) {
     mob.mesh.userData.barFg.position.x = -0.45 * (1 - ratio);
   }
 }
+/* ================= 火球（ドラゴンの遠距離攻撃） ================= */
+const fireballs = [];
+const fbGeom = new THREE.BoxGeometry(0.42, 0.42, 0.42);
+const fbMat = new THREE.MeshBasicMaterial({ color: 0xffa23d });
+function shootFireball(mob) {
+  const m = new THREE.Mesh(fbGeom, fbMat);
+  const start = mob.pos.clone();
+  start.y += 0.4;
+  const ry = mob.mesh.rotation.y;
+  start.x += Math.sin(ry) * 3.4;
+  start.z += Math.cos(ry) * 3.4;
+  m.position.copy(start);
+  const vel = playerCenter.clone().sub(start).normalize().multiplyScalar(8.5);
+  fireballs.push({ m, vel, life: 3.5 });
+  scene.add(m);
+  blip(150, 0.3, 'sawtooth', 0.07, 0.4);
+}
+function updateFireballs(dt) {
+  for (let i = fireballs.length - 1; i >= 0; i--) {
+    const f = fireballs[i];
+    f.life -= dt;
+    f.m.position.addScaledVector(f.vel, dt);
+    f.m.rotation.x += dt * 7;
+    f.m.rotation.y += dt * 9;
+    const p = f.m.position;
+    const hitSolid = isSolid(getBlock(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)));
+    const hitPlayer = !dead && playing && p.distanceTo(playerCenter) < 1.2;
+    if (hitPlayer) damagePlayer(3, p);
+    if (hitSolid || hitPlayer || f.life <= 0) {
+      burst(p.x - 0.5, p.y - 0.5, p.z - 0.5, new THREE.Color(0xff7a2a), 10);
+      scene.remove(f.m);
+      fireballs.splice(i, 1);
+    }
+  }
+}
+
 // 視線上のモブ判定
 const _rayDir = new THREE.Vector3();
 function raycastMobs(reach) {
@@ -1507,7 +1770,8 @@ function raycastMobs(reach) {
   let best = null;
   for (const mob of mobs) {
     const center = mob.pos.clone();
-    center.y += mob.type === 'slime' ? 0.45 : mob.type === 'boss' ? 1.9 : 1.1;
+    const cy = { slime: 0.45, magma: 0.45, bat: 0.8, cinder: 1.0, dragon: 0.3, boss: 1.9 }[mob.type];
+    center.y += cy !== undefined ? cy : 1.1;
     const rel = center.sub(camera.position);
     const t = rel.dot(_rayDir);
     if (t < 0.2 || t > reach) continue;
@@ -1815,6 +2079,7 @@ function chunkTick() {
       document.getElementById('playhint').style.display = 'block';
       for (let i = 0; i < 6; i++) trySpawnMob();
       spawnBoss();
+      spawnDragon();
     }
   }
 }
@@ -1856,9 +2121,10 @@ function updateDay(dt) {
 window.NC = {
   camera, player, scene, renderer, getBlock, setBlock, heightAt, chunks, mobs,
   spawnMobAt, inventory, owned, craftWeapon, equipWeapon, damagePlayer,
-  openCraft, closeCraft, hurtMob, raycastMobs, spawnBoss,
-  boss: () => boss, chunkTick, updateMobs, updateDay,
+  openCraft, closeCraft, hurtMob, raycastMobs, spawnBoss, spawnDragon, trySpawnCaveMob,
+  boss: () => boss, dragon: () => dragon, chunkTick, updateMobs, updateDay,
   startGame, isPlaying: () => playing, isTouch: IS_TOUCH,
+  setPlaying: v => { playing = v; },
   setTime: t => { dayT = t; },
   state: () => ({ equipped, hp: player.hp, kills, mobCount: mobs.length, inv: { ...inventory } }),
 };
@@ -1881,7 +2147,12 @@ function loop(now) {
 
   // 敵スポーン
   spawnTimer -= dt;
-  if (worldReady && spawnTimer <= 0) { trySpawnMob(); spawnTimer = 3; }
+  if (worldReady && spawnTimer <= 0) {
+    if (player.pos.y < 14) trySpawnCaveMob(); // 地下ではマグマエリアの敵
+    else trySpawnMob();
+    spawnTimer = 3;
+  }
+  updateFireballs(dt);
 
   // HP自然回復（被ダメージから6秒後）
   if (!dead && player.hp < player.maxHp && performance.now() / 1000 - lastDamageT > 6) {
@@ -1895,14 +2166,24 @@ function loop(now) {
     document.getElementById('dmgflash').style.opacity = flashT * 0.85;
   }
 
-  // ボスHPバー
+  // ボスHPバー（ゴーレム/ドラゴンのうち、激怒中または近い方を表示）
   {
     const bb = document.getElementById('bossbar');
-    if (boss && playing && !dead && (boss.enraged || boss.pos.distanceTo(player.pos) < 18)) {
+    let tgt = null, tgtD = Infinity;
+    for (const bm of [boss, dragon]) {
+      if (!bm) continue;
+      const bd = bm.pos.distanceTo(player.pos);
+      if (!(bm.enraged || bd < 18)) continue;
+      if (!tgt || (bm.enraged && !tgt.enraged) || (bm.enraged === tgt.enraged && bd < tgtD)) {
+        tgt = bm; tgtD = bd;
+      }
+    }
+    if (tgt && playing && !dead) {
       bb.style.display = 'block';
-      bb.classList.toggle('enraged', boss.enraged);
-      bb.querySelector('.bstate').textContent = boss.enraged ? 'ENRAGED' : 'PASSIVE';
-      bb.querySelector('.bfill').style.width = (Math.max(0, boss.hp) / boss.maxHp * 100) + '%';
+      bb.classList.toggle('enraged', tgt.enraged);
+      document.getElementById('bossName').textContent = (tgt.type === 'dragon' ? '🐉 ' : '👑 ') + tgt.t.name;
+      bb.querySelector('.bstate').textContent = tgt.enraged ? 'ENRAGED' : 'PASSIVE';
+      bb.querySelector('.bfill').style.width = (Math.max(0, tgt.hp) / tgt.maxHp * 100) + '%';
     } else bb.style.display = 'none';
   }
 
