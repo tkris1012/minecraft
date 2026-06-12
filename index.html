@@ -2494,6 +2494,55 @@ function updateDay(dt) {
   stars.position.copy(player.pos);
 }
 
+/* ================= セーブ/ロード =================
+   「シード＋差分(changes)」方式。フェーズ3のFirebase構造
+   (worlds/{id}/seed + changes/"x_y_z") と同じ形でシリアライズする。 */
+const SAVE_KEY = `neocraft_save_${WORLD_SEED}`;
+function saveGame() {
+  if (!worldReady) return;
+  const data = {
+    seed: WORLD_SEED,
+    changes: worldChanges,
+    player: {
+      x: player.pos.x, y: player.pos.y, z: player.pos.z,
+      yaw: player.yaw, pitch: player.pitch, hp: player.hp,
+      inventory, owned, ownedTools, unlockedBlocks, equipped, kills,
+    },
+    dayT,
+    savedAt: Date.now(),
+  };
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch (e) {}
+}
+function loadGame() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return false;
+    const d = JSON.parse(raw);
+    if (d.seed !== WORLD_SEED) return false;
+    Object.assign(worldChanges, d.changes || {});
+    const p = d.player || {};
+    if (p.x !== undefined) player.pos.set(p.x, p.y, p.z);
+    if (p.yaw !== undefined) player.yaw = p.yaw;
+    if (p.pitch !== undefined) player.pitch = p.pitch;
+    player.hp = Math.max(1, p.hp !== undefined ? p.hp : player.maxHp);
+    Object.assign(inventory, p.inventory || {});
+    Object.assign(owned, p.owned || {});
+    Object.assign(ownedTools, p.ownedTools || {});
+    for (const id of p.unlockedBlocks || [])
+      if (!unlockedBlocks.includes(id)) unlockedBlocks.push(id);
+    if (p.equipped && owned[p.equipped]) equipped = p.equipped;
+    kills = p.kills || 0;
+    if (d.dayT !== undefined) dayT = d.dayT;
+    renderHotbar(); renderHearts(); renderWeaponChip(); buildViewModel();
+    enqueueAround(); // ロード位置を中心にチャンク生成し直す
+    setTimeout(() => toast('💾 セーブデータをロードした'), 1200);
+    return true;
+  } catch (e) { return false; }
+}
+const saveLoaded = loadGame();
+addEventListener('pagehide', saveGame);
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveGame(); });
+
 /* ================= デバッグ ================= */
 window.NC = {
   camera, player, scene, renderer, getBlock, setBlock, heightAt, chunks, mobs,
@@ -2504,6 +2553,7 @@ window.NC = {
   setPlaying: v => { playing = v; },
   applyAction, syncAdapter, worldChanges, remotePlayers, WORLD_SEED, unlockBlock, B,
   ownedTools, TOOLS, breakTime, setHold: v => { holdL = v; },
+  saveGame, loadGame, clearSave: () => localStorage.removeItem(SAVE_KEY),
   // ダミーのリモートプレイヤーを1体スポーンして円を描いて歩かせる（同期土台の動作確認用）
   spawnDummyPlayer: () => {
     const id = 'dummy-' + Math.floor(Math.random() * 1000);
@@ -2522,7 +2572,7 @@ window.NC = {
 
 /* ================= メインループ ================= */
 let prev = performance.now();
-let spawnTimer = 0, regenTimer = 0;
+let spawnTimer = 0, regenTimer = 0, saveTimer = 10;
 function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min((now - prev) / 1000, 0.1);
@@ -2547,6 +2597,12 @@ function loop(now) {
     spawnTimer = 3;
   }
   updateFireballs(dt);
+
+  // オートセーブ（10秒ごと）
+  if (started) {
+    saveTimer -= dt;
+    if (saveTimer <= 0) { saveTimer = 10; saveGame(); }
+  }
 
   // HP自然回復（被ダメージから6秒後）
   if (!dead && player.hp < player.maxHp && performance.now() / 1000 - lastDamageT > 6) {
