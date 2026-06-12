@@ -384,7 +384,8 @@
 import * as THREE from 'three';
 
 /* ================= ブロック定義 ================= */
-const B = { AIR:0, GRASS:1, DIRT:2, STONE:3, SAND:4, WATER:5, WOOD:6, LEAF:7, GLASS:8, GLOW:9, SNOW:10, LAVA:11, DEEP:12, PLANK:13, BRICK:14, TORCH:15, BENCH:16, FURN:17 };
+const B = { AIR:0, GRASS:1, DIRT:2, STONE:3, SAND:4, WATER:5, WOOD:6, LEAF:7, GLASS:8, GLOW:9, SNOW:10, LAVA:11, DEEP:12, PLANK:13, BRICK:14, TORCH:15, BENCH:16, FURN:17, PSLAB:18, BSLAB:19, PSTAIR:20, BSTAIR:24 };
+// PSTAIR/BSTAIRは向きごとに4ID（+0:-z向き, +1:-x, +2:+z, +3:+x）
 const DEFS = {
   [B.GRASS]: { name:'草ブロック',     color:'#5fae53', tiles:{ top:[0,0], side:[1,0], bottom:[2,0] } },
   [B.DIRT]:  { name:'土',             color:'#79553a', tiles:{ top:[2,0], side:[2,0], bottom:[2,0] } },
@@ -403,10 +404,33 @@ const DEFS = {
   [B.TORCH]: { name:'松明',           color:'#ffd166', tiles:{ top:[1,1], side:[1,1], bottom:[1,1] } },
   [B.BENCH]: { name:'作業台',         color:'#a07b5a', tiles:{ top:[7,1], side:[0,2], bottom:[5,1] } },
   [B.FURN]:  { name:'かまど',         color:'#8a8f94', tiles:{ top:[3,0], side:[1,2], bottom:[3,0] } },
+  [B.PSLAB]: { name:'板材ハーフ',     color:'#b08968', tiles:{ top:[5,1], side:[5,1], bottom:[5,1] } },
+  [B.BSLAB]: { name:'石レンガハーフ', color:'#9aa1a9', tiles:{ top:[6,1], side:[6,1], bottom:[6,1] } },
 };
+for (let k = 0; k < 4; k++) {
+  DEFS[B.PSTAIR + k] = { name:'板材階段',     color:'#b08968', tiles:{ top:[5,1], side:[5,1], bottom:[5,1] } };
+  DEFS[B.BSTAIR + k] = { name:'石レンガ階段', color:'#9aa1a9', tiles:{ top:[6,1], side:[6,1], bottom:[6,1] } };
+}
 for (const id in DEFS) DEFS[id].c = new THREE.Color(DEFS[id].color);
+/* ---- フルブロック以外の形状（ブロック内サブボックス定義） ---- */
+const FULL_BOX = [[0, 0, 0, 1, 1, 1]];
+const HALF_BOX = [[0, 0, 0, 1, 0.5, 1]];
+const SHAPE_BOXES = { [B.PSLAB]: HALF_BOX, [B.BSLAB]: HALF_BOX };
+{
+  const tops = [
+    [0, 0.5, 0,   1, 1, 0.5],   // -z向き（上段が-z側）
+    [0, 0.5, 0,   0.5, 1, 1],   // -x向き
+    [0, 0.5, 0.5, 1, 1, 1],     // +z向き
+    [0.5, 0.5, 0, 1, 1, 1],     // +x向き
+  ];
+  for (let k = 0; k < 4; k++) {
+    SHAPE_BOXES[B.PSTAIR + k] = [HALF_BOX[0], tops[k]];
+    SHAPE_BOXES[B.BSTAIR + k] = [HALF_BOX[0], tops[k]];
+  }
+}
+const isPartial = id => SHAPE_BOXES[id] !== undefined;
 const isSolid  = id => id !== B.AIR && id !== B.WATER && id !== B.LAVA && id !== B.TORCH;
-const isOpaque = id => id !== B.AIR && id !== B.WATER && id !== B.GLASS && id !== B.LAVA && id !== B.TORCH;
+const isOpaque = id => id !== B.AIR && id !== B.WATER && id !== B.GLASS && id !== B.LAVA && id !== B.TORCH && !isPartial(id);
 const BASE_HOTBAR = [B.GRASS, B.DIRT, B.STONE, B.SAND, B.WOOD, B.LEAF, B.GLASS, B.GLOW, B.WATER];
 const unlockedBlocks = []; // クラフトで解放される建材（板材・石レンガ・松明・作業台・かまど）
 const hb = () => BASE_HOTBAR.concat(unlockedBlocks);
@@ -417,7 +441,8 @@ function unlockBlock(id) {
   toast(`🧱 <b>${DEFS[id].name}</b>がホットバーに追加された！`);
 }
 // 破壊で手に入る素材
-const BLOCK_MAT = { [B.WOOD]:'wood', [B.STONE]:'stone', [B.GLOW]:'glow', [B.DEEP]:'stone', [B.PLANK]:'wood', [B.BRICK]:'stone', [B.BENCH]:'wood', [B.FURN]:'stone' };
+const BLOCK_MAT = { [B.WOOD]:'wood', [B.STONE]:'stone', [B.GLOW]:'glow', [B.DEEP]:'stone', [B.PLANK]:'wood', [B.BRICK]:'stone', [B.BENCH]:'wood', [B.FURN]:'stone', [B.PSLAB]:'wood', [B.BSLAB]:'stone' };
+for (let k = 0; k < 4; k++) { BLOCK_MAT[B.PSTAIR + k] = 'wood'; BLOCK_MAT[B.BSTAIR + k] = 'stone'; }
 
 /* ================= テクスチャ生成 ================= */
 const TILE = 16, ACOLS = 8;
@@ -933,6 +958,12 @@ function meshChunk(cx, cz) {
       continue;
     }
     const def = DEFS[id];
+    const shape = SHAPE_BOXES[id];
+    if (shape) { // ハーフ・階段はサブボックスで描画
+      for (const b of shape)
+        pushBoxGeom(groups.opaque, wx + b[0], y + b[1], wz + b[2], wx + b[3], y + b[4], wz + b[5], def.tiles.side);
+      continue;
+    }
     const grp = id === B.WATER ? groups.water : id === B.GLASS ? groups.glass : id === B.GLOW ? groups.glow : id === B.LAVA ? groups.lava : groups.opaque;
     const sinkTop = (id === B.WATER || id === B.LAVA) && getBlock(wx, y + 1, wz) === B.AIR;
     for (const f of FACES) {
@@ -1138,14 +1169,28 @@ let selected = 0;
 let dead = false, craftOpen = false;
 let lastDamageT = -99, regenAcc = 0, flashT = 0, kills = 0, lavaAcc = 0;
 
-function aabbCollides(px, py, pz) {
+// プレイヤーAABBと交差しているブロック内サブボックスを列挙（ハーフ・階段対応）
+function collideBoxes(px, py, pz) {
+  const res = [];
   const x0 = Math.floor(px - player.W), x1 = Math.floor(px + player.W);
   const y0 = Math.floor(py), y1 = Math.floor(py + player.HGT);
   const z0 = Math.floor(pz - player.W), z1 = Math.floor(pz + player.W);
-  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++)
-    if (isSolid(getBlock(x, y, z))) return true;
-  return false;
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) {
+    const id = getBlock(x, y, z);
+    if (!isSolid(id)) continue;
+    const boxes = SHAPE_BOXES[id] || FULL_BOX;
+    for (const b of boxes) {
+      const bx0 = x + b[0], by0 = y + b[1], bz0 = z + b[2];
+      const bx1 = x + b[3], by1 = y + b[4], bz1 = z + b[5];
+      if (px + player.W > bx0 && px - player.W < bx1 &&
+          py + player.HGT > by0 && py < by1 &&
+          pz + player.W > bz0 && pz - player.W < bz1)
+        res.push([bx0, by0, bz0, bx1, by1, bz1]);
+    }
+  }
+  return res;
 }
+function aabbCollides(px, py, pz) { return collideBoxes(px, py, pz).length > 0; }
 
 function physics(dt) {
   dt = Math.min(dt, 0.05);
@@ -1185,25 +1230,40 @@ function physics(dt) {
     if (keys['Space'] && player.onGround) { player.vel.y = 8.4; player.onGround = false; }
   }
 
+  const wasGround = player.onGround;
   player.onGround = false;
   const p = player.pos;
+  // X軸（半ブロックは自動でステップアップ）
+  const prevX = p.x;
   p.x += player.vel.x * dt;
   if (aabbCollides(p.x, p.y, p.z)) {
-    const dir = Math.sign(player.vel.x);
-    p.x = dir > 0 ? Math.floor(p.x + player.W) - player.W - 0.001 : Math.floor(p.x - player.W) + 1 + player.W + 0.001;
-    player.vel.x = 0;
+    if (wasGround && !aabbCollides(p.x, p.y + 0.52, p.z)) p.y += 0.52;
+    else { p.x = prevX; player.vel.x = 0; }
   }
+  // Z軸
+  const prevZ = p.z;
   p.z += player.vel.z * dt;
   if (aabbCollides(p.x, p.y, p.z)) {
-    const dir = Math.sign(player.vel.z);
-    p.z = dir > 0 ? Math.floor(p.z + player.W) - player.W - 0.001 : Math.floor(p.z - player.W) + 1 + player.W + 0.001;
-    player.vel.z = 0;
+    if (wasGround && !aabbCollides(p.x, p.y + 0.52, p.z)) p.y += 0.52;
+    else { p.z = prevZ; player.vel.z = 0; }
   }
+  // Y軸（サブボックスの上面/下面に合わせて解決）
   p.y += player.vel.y * dt;
-  if (aabbCollides(p.x, p.y, p.z)) {
-    if (player.vel.y < 0) { p.y = Math.floor(p.y) + 1; player.onGround = true; }
-    else p.y = Math.floor(p.y + player.HGT) - player.HGT - 0.001;
-    player.vel.y = 0;
+  {
+    const hits = collideBoxes(p.x, p.y, p.z);
+    if (hits.length) {
+      if (player.vel.y < 0) {
+        let top = -Infinity;
+        for (const b of hits) if (b[4] > top) top = b[4];
+        p.y = top;
+        player.onGround = true;
+      } else {
+        let bottom = Infinity;
+        for (const b of hits) if (b[1] < bottom) bottom = b[1];
+        p.y = bottom - player.HGT - 0.001;
+      }
+      player.vel.y = 0;
+    }
   }
   if (p.y < -20) { p.y = 60; player.vel.set(0, 0, 0); }
 
@@ -1291,10 +1351,16 @@ const HARDNESS = {
   [B.GLASS]: 0.25, [B.TORCH]: 0.1,
 };
 const TOOL_TARGETS = {
-  pick:   [B.STONE, B.BRICK, B.FURN, B.GLOW, B.DEEP],
-  axe:    [B.WOOD, B.PLANK, B.BENCH],
+  pick:   [B.STONE, B.BRICK, B.FURN, B.GLOW, B.DEEP, B.BSLAB],
+  axe:    [B.WOOD, B.PLANK, B.BENCH, B.PSLAB],
   shovel: [B.GRASS, B.DIRT, B.SAND, B.SNOW],
 };
+for (let k = 0; k < 4; k++) {
+  TOOL_TARGETS.pick.push(B.BSTAIR + k);
+  TOOL_TARGETS.axe.push(B.PSTAIR + k);
+  HARDNESS[B.PSTAIR + k] = 1.2; HARDNESS[B.BSTAIR + k] = 2.2;
+}
+HARDNESS[B.PSLAB] = 1.2; HARDNESS[B.BSLAB] = 2.2;
 function breakTime(id) {
   const base = HARDNESS[id] !== undefined ? HARDNESS[id] : 1.0;
   for (const tool in TOOL_TARGETS)
@@ -1310,6 +1376,10 @@ const RECIPES = [
   { id: 'plank',  kind: 'block',  name: '板材',     icon: '🪵', block: () => B.PLANK, cost: { wood: 2 }, desc: '建築用の木ブロック' },
   { id: 'torch',  kind: 'block',  name: '松明',     icon: '🔥', block: () => B.TORCH, cost: { wood: 1, glow: 1 }, desc: '置くと周囲を照らす光源' },
   { id: 'brick',  kind: 'block',  name: '石レンガ', icon: '🧱', block: () => B.BRICK, cost: { stone: 4 }, table: true, desc: '建築用の石ブロック' },
+  { id: 'pslab',  kind: 'block',  name: '板材ハーフ',     icon: '🟫', block: () => B.PSLAB, cost: { wood: 1 }, desc: '高さ半分。段差として歩いて登れる' },
+  { id: 'pstair', kind: 'block',  name: '板材階段',       icon: '🪜', block: () => B.PSTAIR, cost: { wood: 2 }, desc: '向いている方向に合わせて設置される' },
+  { id: 'bslab',  kind: 'block',  name: '石レンガハーフ', icon: '⬜', block: () => B.BSLAB, cost: { stone: 2 }, table: true, desc: '高さ半分の石レンガ' },
+  { id: 'bstair', kind: 'block',  name: '石レンガ階段',   icon: '🪜', block: () => B.BSTAIR, cost: { stone: 3 }, table: true, desc: '向いている方向に合わせて設置される' },
   { id: 'furn',   kind: 'block',  name: 'かまど',   icon: '♨️', block: () => B.FURN, cost: { stone: 8 }, table: true, desc: '置いて近くに立つと調理ができる' },
   { id: 'cook',   kind: 'food',   name: '焼き肉',   icon: '🍖', cost: { rawmeat: 1, wood: 1 }, furnace: true, desc: 'かまどの近くで調理。食べるとHP+6' },
   { id: 'pick',   kind: 'tool',   name: 'つるはし', icon: '⛏️', cost: { wood: 2, stone: 3 }, table: true, desc: '石系ブロックの採掘が3.5倍速' },
@@ -2347,8 +2417,11 @@ function doPlace() {
   const hit = raycast();
   if (!hit) return;
   const px = hit.x + hit.face[0], py = hit.y + hit.face[1], pz = hit.z + hit.face[2];
-  const id = hb()[selected];
+  let id = hb()[selected];
   if (id === undefined) return;
+  // 階段は向いている方向に合わせて配置（上段が進行方向側）
+  if (id === B.PSTAIR || id === B.BSTAIR)
+    id += ((Math.round(player.yaw / (Math.PI / 2)) % 4) + 4) % 4;
   const p = player.pos;
   const overlap = isSolid(id) &&
     px + 1 > p.x - player.W && px < p.x + player.W &&
@@ -2364,7 +2437,10 @@ function doPlace() {
 function doPick() {
   const hit = raycast();
   if (hit) {
-    const i = hb().indexOf(hit.id);
+    let pickId = hit.id;
+    if (pickId >= B.PSTAIR && pickId < B.PSTAIR + 4) pickId = B.PSTAIR;
+    if (pickId >= B.BSTAIR && pickId < B.BSTAIR + 4) pickId = B.BSTAIR;
+    const i = hb().indexOf(pickId);
     if (i >= 0) { selected = i; renderHotbar(); }
   }
 }
@@ -2645,6 +2721,7 @@ window.NC = {
   startGame, isPlaying: () => playing, isTouch: IS_TOUCH,
   setPlaying: v => { playing = v; },
   applyAction, syncAdapter, worldChanges, remotePlayers, WORLD_SEED, unlockBlock, B,
+  aabbCollides, collideBoxes, SHAPE_BOXES,
   ownedTools, TOOLS, ownedArmor, armorCount, breakTime, setHold: v => { holdL = v; },
   saveGame, loadGame, clearSave: () => localStorage.removeItem(SAVE_KEY),
   // ダミーのリモートプレイヤーを1体スポーンして円を描いて歩かせる（同期土台の動作確認用）
