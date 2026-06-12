@@ -1224,6 +1224,8 @@ function physics(dt) {
 
 function damagePlayer(dmg, srcPos) {
   if (dead || player.hp <= 0) return;
+  // 防具による軽減（1部位-15%、最低1ダメージ）
+  dmg = Math.max(1, Math.round(dmg * (1 - armorCount() * 0.15)));
   player.hp -= dmg;
   lastDamageT = performance.now() / 1000;
   flashT = 1;
@@ -1277,6 +1279,9 @@ const TOOLS = {
   shovel: { name: 'シャベル', icon: '🧹', recipe: { wood: 2, stone: 1 } },
 };
 const ownedTools = { pick: false, axe: false, shovel: false };
+/* ---- 防具（作ると自動装着。1部位ごとに被ダメージ-15%） ---- */
+const ownedArmor = { helm: false, chest: false, legs: false };
+const armorCount = () => (ownedArmor.helm ? 1 : 0) + (ownedArmor.chest ? 1 : 0) + (ownedArmor.legs ? 1 : 0);
 // ブロックの硬さ（素手での破壊秒数）
 const HARDNESS = {
   [B.GRASS]: 0.7, [B.DIRT]: 0.6, [B.SAND]: 0.6, [B.SNOW]: 0.4,
@@ -1308,6 +1313,9 @@ const RECIPES = [
   { id: 'pick',   kind: 'tool',   name: 'つるはし', icon: '⛏️', cost: { wood: 2, stone: 3 }, table: true, desc: '石系ブロックの採掘が3.5倍速' },
   { id: 'axe',    kind: 'tool',   name: '斧',       icon: '🪓', cost: { wood: 3, stone: 1 }, table: true, desc: '木系ブロックの伐採が3.5倍速' },
   { id: 'shovel', kind: 'tool',   name: 'シャベル', icon: '🧹', cost: { wood: 2, stone: 1 }, table: true, desc: '土・砂系の掘削が3.5倍速' },
+  { id: 'helm',   kind: 'armor',  name: '石の兜',   icon: '🪖', cost: { stone: 5 }, table: true, desc: '被ダメージ-15%' },
+  { id: 'chest',  kind: 'armor',  name: '石の鎧',   icon: '🛡️', cost: { stone: 8 }, table: true, desc: '被ダメージ-15%' },
+  { id: 'legs',   kind: 'armor',  name: '石の脚甲', icon: '🦵', cost: { stone: 7 }, table: true, desc: '被ダメージ-15%' },
   { id: 'wood',   kind: 'weapon', name: '木の剣',   icon: '🗡️', cost: { wood: 3 } },
   { id: 'stone',  kind: 'weapon', name: '石の剣',   icon: '⚔️', cost: { wood: 2, stone: 3 }, table: true },
   { id: 'neon',   kind: 'weapon', name: 'ネオンブレード', icon: '🔷', cost: { stone: 2, glow: 3, core: 2 }, table: true },
@@ -1320,7 +1328,9 @@ function nearTable() {
 }
 const isCrafted = r =>
   r.kind === 'block' ? hb().includes(r.block()) :
-  r.kind === 'tool' ? ownedTools[r.id] : !!owned[r.id];
+  r.kind === 'tool' ? ownedTools[r.id] :
+  r.kind === 'armor' ? ownedArmor[r.id] :
+  r.kind === 'food' ? false : !!owned[r.id];
 const canAfford = cost => Object.keys(cost).every(m => inventory[m] >= cost[m]);
 function craftRecipe(rid) {
   const r = RECIPES.find(x => x.id === rid);
@@ -1329,6 +1339,7 @@ function craftRecipe(rid) {
   for (const m in r.cost) inventory[m] -= r.cost[m];
   if (r.kind === 'block') unlockBlock(r.block());
   else if (r.kind === 'tool') { ownedTools[r.id] = true; toast(`${r.icon} <b>${r.name}</b>を作った！`); }
+  else if (r.kind === 'armor') { ownedArmor[r.id] = true; toast(`${r.icon} <b>${r.name}</b>を装着した！（被ダメージ-${armorCount() * 15}%）`); renderWeaponChip(); }
   else { owned[r.id] = true; toast(`⚒️ <b>${r.name}</b>を合成した！`); equipWeapon(r.id); }
   blip(520, 0.1, 'sine', 0.06, 1.4);
   setTimeout(() => blip(780, 0.12, 'sine', 0.06, 1.2), 90);
@@ -1351,8 +1362,10 @@ function gainMat(m, n = 1) {
 
 function renderWeaponChip() {
   const w = WEAPONS[equipped];
+  const ar = armorCount();
   document.getElementById('weaponchip').innerHTML =
-    `⚔️ <b>${w.name}</b><br><span class="atk">ATK ${w.atk}</span>`;
+    `⚔️ <b>${w.name}</b><br><span class="atk">ATK ${w.atk}</span>` +
+    (ar > 0 ? `<br>🛡️ -${ar * 15}%` : '');
 }
 function renderCraft() {
   document.getElementById('matsRow').innerHTML = Object.keys(MAT_NAMES).map(m =>
@@ -1371,7 +1384,7 @@ function renderCraft() {
         btn = equipped === r.id
           ? `<button class="btn equipped">装備中</button>`
           : `<button class="btn ghost" data-eq="${r.id}">装備する</button>`;
-      } else btn = `<button class="btn equipped">${r.kind === 'block' ? '解放済み' : '作成済み'}</button>`;
+      } else btn = `<button class="btn equipped">${r.kind === 'block' ? '解放済み' : r.kind === 'armor' ? '装着中' : '作成済み'}</button>`;
       sub = r.desc || '合成済み';
     } else {
       const needTable = r.table && !table;
@@ -1392,6 +1405,7 @@ function renderCraft() {
      <div class="wreq">いつでも使える</div></div>${fistBtn}</div>` +
     section('武器', RECIPES.filter(r => r.kind === 'weapon')) +
     section('道具', RECIPES.filter(r => r.kind === 'tool')) +
+    section('防具', RECIPES.filter(r => r.kind === 'armor')) +
     section('ブロック・設備', RECIPES.filter(r => r.kind === 'block')) +
     (table ? '' : `<div class="tablehint">🛠️ 作業台を作って近くに置くと、すべてのレシピが解放されます</div>`);
   document.querySelectorAll('[data-craft]').forEach(b => b.addEventListener('click', () => craftRecipe(b.dataset.craft)));
@@ -2506,7 +2520,7 @@ function saveGame() {
     player: {
       x: player.pos.x, y: player.pos.y, z: player.pos.z,
       yaw: player.yaw, pitch: player.pitch, hp: player.hp,
-      inventory, owned, ownedTools, unlockedBlocks, equipped, kills,
+      inventory, owned, ownedTools, ownedArmor, unlockedBlocks, equipped, kills,
     },
     dayT,
     savedAt: Date.now(),
@@ -2528,6 +2542,7 @@ function loadGame() {
     Object.assign(inventory, p.inventory || {});
     Object.assign(owned, p.owned || {});
     Object.assign(ownedTools, p.ownedTools || {});
+    Object.assign(ownedArmor, p.ownedArmor || {});
     for (const id of p.unlockedBlocks || [])
       if (!unlockedBlocks.includes(id)) unlockedBlocks.push(id);
     if (p.equipped && owned[p.equipped]) equipped = p.equipped;
@@ -2552,7 +2567,7 @@ window.NC = {
   startGame, isPlaying: () => playing, isTouch: IS_TOUCH,
   setPlaying: v => { playing = v; },
   applyAction, syncAdapter, worldChanges, remotePlayers, WORLD_SEED, unlockBlock, B,
-  ownedTools, TOOLS, breakTime, setHold: v => { holdL = v; },
+  ownedTools, TOOLS, ownedArmor, armorCount, breakTime, setHold: v => { holdL = v; },
   saveGame, loadGame, clearSave: () => localStorage.removeItem(SAVE_KEY),
   // ダミーのリモートプレイヤーを1体スポーンして円を描いて歩かせる（同期土台の動作確認用）
   spawnDummyPlayer: () => {
