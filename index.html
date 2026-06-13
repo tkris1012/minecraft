@@ -682,23 +682,23 @@ lavaTex.generateMipmaps = false;
 lavaTex.wrapS = lavaTex.wrapT = THREE.RepeatWrapping;
 lavaTex.colorSpace = THREE.SRGBColorSpace;
 
-// Excelアイコン風テクスチャ（Excelソード/dbsheetブレード用）
-const excelCanvas = document.createElement('canvas');
-excelCanvas.width = excelCanvas.height = 64;
-{
-  const ctx = excelCanvas.getContext('2d');
+// Excelアイコン風テクスチャ（Excelソード=緑 / dbsブレード=青）
+function makeExcelIcon(cover, grid) {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 64;
+  const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, 64, 64);
   // 白いシート（右側）
   ctx.fillStyle = '#f4f8f6';
   ctx.fillRect(22, 6, 38, 52);
-  ctx.strokeStyle = '#b9d5c6';
+  ctx.strokeStyle = grid;
   ctx.lineWidth = 2;
   for (let i = 1; i < 4; i++) {
     ctx.beginPath(); ctx.moveTo(22, 6 + i * 13); ctx.lineTo(60, 6 + i * 13); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(22 + i * 9.5, 6); ctx.lineTo(22 + i * 9.5, 58); ctx.stroke();
   }
-  // 緑の表紙（左側）
-  ctx.fillStyle = '#1d6f42';
+  // 表紙（左側）
+  ctx.fillStyle = cover;
   ctx.beginPath();
   ctx.roundRect(2, 2, 34, 60, 6);
   ctx.fill();
@@ -708,9 +708,15 @@ excelCanvas.width = excelCanvas.height = 64;
   ctx.lineCap = 'round';
   ctx.beginPath(); ctx.moveTo(11, 18); ctx.lineTo(27, 46); ctx.stroke();
   ctx.beginPath(); ctx.moveTo(27, 18); ctx.lineTo(11, 46); ctx.stroke();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return { canvas: cv, tex };
 }
-const excelTex = new THREE.CanvasTexture(excelCanvas);
-excelTex.colorSpace = THREE.SRGBColorSpace;
+const excelGreen = makeExcelIcon('#1d6f42', '#b9d5c6');
+const excelBlue  = makeExcelIcon('#1e5fd6', '#bcd0f5');
+const excelCanvas = excelGreen.canvas;  // ホットバー用サムネイル（既存の参照を維持）
+const excelTex = excelGreen.tex;        // Excelソード（緑）
+const excelBlueTex = excelBlue.tex;     // dbsブレード（青）
 
 // ホットバー用サムネイル
 function tileThumb(tc, tr) {
@@ -1775,7 +1781,7 @@ function spawnRemoteFx(rp, p) {
     blip(720, 0.07, 'square', 0.04, 1.7);
   } else if (p.fk === 'dbs') {
     const f = new THREE.Vector3(-Math.sin(rp.yaw), 0, -Math.cos(rp.yaw));
-    iconBurst(ox + f.x * 1.2, oy - 0.3, oz + f.z * 1.2, 10);
+    iconBurst(ox + f.x * 1.2, oy - 0.3, oz + f.z * 1.2, 10, false, excelBlueTex);
     blip(1200, 0.09, 'triangle', 0.04, 1.5);
   }
 }
@@ -2456,9 +2462,9 @@ function updateFireballs(dt) {
 
 /* ================= Excelアイコンエフェクト＆弾（Excelソード/dbsheetブレード） ================= */
 const iconParts = []; // 弾けるアイコン
-function iconBurst(x, y, z, n = 12, big = false) {
+function iconBurst(x, y, z, n = 12, big = false, tex = excelTex) {
   for (let i = 0; i < n; i++) {
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: excelTex, transparent: true }));
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
     sp.scale.setScalar((big ? 0.42 : 0.3) * (0.8 + Math.random() * 0.5));
     sp.position.set(x, y, z);
     sp.material.rotation = Math.random() * Math.PI;
@@ -2651,7 +2657,7 @@ function tryMobAttack() {
     // dbsブレード：斬撃でアイコンが弾ける
     if (equipped === 'dbs') {
       const c = mobHit.mob.pos;
-      iconBurst(c.x, c.y + 1, c.z, 10);
+      iconBurst(c.x, c.y + 1, c.z, 10, false, excelBlueTex); // 青いアイコンが弾ける
       blip(1200, 0.09, 'triangle', 0.05, 1.5); // シャキーン
       setTimeout(() => blip(1700, 0.07, 'triangle', 0.04, 1.3), 60);
       lastFx = { t: Date.now(), kind: 'dbs' }; // 他プレイヤーへ同期
@@ -3124,7 +3130,7 @@ window.NC = {
   aabbCollides, collideBoxes, SHAPE_BOXES,
   ownedTools, TOOLS, ownedArmor, armorCount, breakTime, setHold: v => { holdL = v; },
   saveGame, loadGame, clearSave: () => localStorage.removeItem(SAVE_KEY),
-  renderPlayerList, fireExcelShot, iconBurst,
+  renderPlayerList, fireExcelShot, iconBurst, tryMobAttack, excelBlueTex,
   excelShots: () => excelShots.length, iconParts: () => iconParts.length,
   // ダミーのリモートプレイヤーを1体スポーンして円を描いて歩かせる（同期土台の動作確認用）
   spawnDummyPlayer: () => {
