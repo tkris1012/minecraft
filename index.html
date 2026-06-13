@@ -297,11 +297,17 @@
     border-color: rgba(244,63,94,0.4); }
   #btnJump   { right: 18px; bottom: 160px; width: 58px; height: 58px; }
   #btnPlace  { right: 36px; bottom: 248px; width: 52px; height: 52px; }
-  #btnPause  { right: 12px; top: 12px; width: 42px; height: 42px; font-size: 17px; }
-  #btnCraft  { right: 64px; top: 12px; width: 42px; height: 42px; font-size: 19px; }
-  #btnFly    { right: 116px; top: 12px; width: 42px; height: 42px; font-size: 18px; }
-  #btnDown   { right: 168px; top: 12px; width: 42px; height: 42px; font-size: 17px; }
-  body.touch #toasts { top: 64px; }
+  /* 右上：システム/ユーティリティを2段に配置（はみ出し防止） */
+  .tbtn { width: 44px; height: 44px; }
+  #btnPause  { right: 12px;  top: 12px; font-size: 17px; }
+  #btnCraft  { right: 64px;  top: 12px; font-size: 19px; }
+  #btnFly    { right: 116px; top: 12px; font-size: 18px; }
+  #btnDown   { right: 168px; top: 12px; font-size: 17px; }
+  #btnChat   { right: 12px;  top: 64px; font-size: 19px; }
+  #btnBeacon { right: 64px;  top: 64px; font-size: 19px; }
+  #btnRank   { right: 116px; top: 64px; font-size: 19px; }
+  body.touch #toasts { top: 160px; right: auto; left: 50%; transform: translateX(-50%); align-items: center; }
+  body.touch #playerlist { top: 118px; }
   body.touch #hotbar { pointer-events: auto; }
 
   @media (max-width: 760px) {
@@ -313,8 +319,8 @@
     #hearts { bottom: 66px; }
     .heart { font-size: 14px; }
     #stats { font-size: 10px; padding: 7px 10px; line-height: 1.6; }
-    #weaponchip { bottom: auto; top: 64px; right: 12px; font-size: 10.5px; padding: 7px 12px; }
-    #bossbar { top: 62px; width: 80vw; }
+    #weaponchip { bottom: auto; top: 120px; right: 12px; font-size: 10.5px; padding: 6px 11px; }
+    #bossbar { top: auto; bottom: 120px; width: 86vw; }
     #card { padding: 26px 22px; }
     #card h1 { font-size: 32px; }
     #controls { font-size: 11.5px; gap: 5px 12px; grid-template-columns: 1fr; max-width: 250px; }
