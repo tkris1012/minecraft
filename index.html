@@ -1050,6 +1050,8 @@ const syncAdapter = {
   onChat(cb) { this._chatCb = cb; },
   sendBeacon(b) { if (this._beaconCb) this._beaconCb(b); }, // オフラインはローカル反映のみ
   onBeacon(cb) { this._beaconCb = cb; },
+  sendScore(s) { /* 接続時に本物へ差し替え */ },
+  onScores(cb) { this._scoresCb = cb; },
   // テスト用：リモートからの受信をシミュレート
   simulateRemoteAction(a) { if (this._actionCb) this._actionCb(a); },
   simulateRemotePresence(p) { if (this._presenceCb) this._presenceCb(p); },
@@ -2076,16 +2078,35 @@ function chatKey(e) {
 }
 
 /* ================= ボス討伐ランキング ================= */
+let scoreboard = {}; // uid -> { name, bk }（全ユーザーの永続記録）
+function pushScore() { // 自分の討伐数を保存（接続時のみ）
+  if (syncAdapter.connected && syncAdapter.sendScore) syncAdapter.sendScore({ name: myName(), bk: bossKills });
+}
+syncAdapter.onScores(s => { scoreboard = s || {}; if (rankOpen) renderRanking(); });
 function renderRanking() {
   const list = document.getElementById('rankList');
-  const entries = [{ name: myName(), bk: bossKills, me: true }];
-  for (const rp of remotePlayers.values()) entries.push({ name: rp.name || 'Player', bk: rp.bk || 0, me: false });
+  let entries;
+  const myUid = syncAdapter.uid;
+  if (syncAdapter.connected && Object.keys(scoreboard).length) {
+    // 全ユーザーの永続記録から（オフラインの人も含む）
+    const map = {};
+    for (const uid in scoreboard) map[uid] = { name: scoreboard[uid].name || 'Player', bk: scoreboard[uid].bk || 0 };
+    if (myUid) map[myUid] = { name: myName(), bk: bossKills }; // 自分は最新値で
+    entries = Object.keys(map).map(uid => ({ name: map[uid].name, bk: map[uid].bk, me: uid === myUid }));
+  } else {
+    // フォールバック：オンラインの仲間のみ
+    entries = [{ name: myName(), bk: bossKills, me: true }];
+    for (const rp of remotePlayers.values()) entries.push({ name: rp.name || 'Player', bk: rp.bk || 0, me: false });
+  }
   entries.sort((a, b) => b.bk - a.bk);
+  const total = entries.length;
   const medal = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1);
   const rows = entries.slice(0, 10).map((e, i) =>
     `<div class="rrow${e.me ? ' me' : ''}"><span class="rk">${medal(i)}</span>` +
     `<span class="rn">${escHtml(e.name)}</span><span class="rc">${e.bk}体</span></div>`).join('');
   list.innerHTML = rows || `<div class="rempty">まだ討伐記録がない</div>`;
+  const sub = document.querySelector('#rankPanel .rsub');
+  if (sub) sub.textContent = (syncAdapter.connected && total ? `全${total}人中TOP10` : 'オンラインの仲間') + ' — R で開閉';
 }
 function toggleRanking(force) {
   rankOpen = force !== undefined ? force : !rankOpen;
@@ -2619,7 +2640,7 @@ function killMob(mob) {
     setTimeout(() => blip(660, 0.15, 'sine', 0.07, 1.2), 130);
     setTimeout(() => blip(880, 0.3, 'sine', 0.07, 1.0), 260);
     // 討伐ランキング：近くで戦った参加者だけカウント
-    if (player.pos.distanceTo(mob.pos) < 70) { bossKills++; if (rankOpen) renderRanking(); }
+    if (player.pos.distanceTo(mob.pos) < 70) { bossKills++; pushScore(); if (rankOpen) renderRanking(); }
   } else {
     burst(mob.pos.x - 0.5, mob.pos.y, mob.pos.z - 0.5, mob.t.color, 16);
     blip(300, 0.22, 'triangle', 0.06, 0.35);
@@ -3557,6 +3578,12 @@ async function initFirebase() {
     syncAdapter.sendBeacon = b => set(beaconRef, b);
     onValue(beaconRef, snap => { if (syncAdapter._beaconCb) syncAdapter._beaconCb(snap.val()); });
 
+    // --- ボス討伐ランキング（全ユーザーの永続記録） ---
+    const myScoreRef = ref(db, `worlds/${worldId}/scores/${uid}`);
+    syncAdapter.sendScore = s => set(myScoreRef, { name: s.name, bk: s.bk, t: Date.now() }).catch(() => {});
+    onValue(ref(db, `worlds/${worldId}/scores`), snap => { if (syncAdapter._scoresCb) syncAdapter._scoresCb(snap.val() || {}); });
+    pushScore(); // 参加時に自分の記録を登録
+
     // --- チャット ---
     const chatRef = ref(db, `worlds/${worldId}/chat`);
     syncAdapter.sendChat = m => push(chatRef, { uid, name: m.name, msg: m.msg, t: Date.now() });
@@ -3684,6 +3711,7 @@ window.NC = {
   setBeacon, applyBeacon, openInvite, getBeacon: () => beacon,
   spawnBlackDragon, spawnSnowGolem, blackDragon: () => blackDragon, snowGolem: () => snowGolem,
   toggleRanking, renderRanking, addBossKill: () => { bossKills++; }, getBossKills: () => bossKills,
+  setScoreboard: s => { scoreboard = s; },
   excelShots: () => excelShots.length, iconParts: () => iconParts.length,
   // ダミーのリモートプレイヤーを1体スポーンして円を描いて歩かせる（同期土台の動作確認用）
   spawnDummyPlayer: () => {
