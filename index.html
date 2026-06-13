@@ -1607,7 +1607,7 @@ function buildViewModel() {
       stone:   { blade: 0x9aa1a9, edge: 0xc2c8ce, guard: 0x5f6468 },
       neon:    { blade: 0x22d3ee, edge: 0xa5f3fc, guard: 0x0e7490 },
       excel: { blade: 0x21a366, edge: 0x9fe3c0, guard: 0x185c37 },
-      dbs:   { blade: 0x107c41, edge: 0xd9ffe8, guard: 0x0b5c30 },
+      dbs:   { blade: 0x2f7bff, edge: 0xbfe0ff, guard: 0x1e40af },
     }[equipped];
     const glowy = equipped === 'neon' || equipped === 'excel' || equipped === 'dbs';
     const bladeMat = glowy ? bas(colors.blade) : lam(colors.blade);
@@ -1621,8 +1621,8 @@ function buildViewModel() {
       const glow = box(0.16, 0.6, 0.1, new THREE.MeshBasicMaterial({ color: colors.blade, transparent: true, opacity: 0.18 }), 0, 0.07, 0);
       viewModel.add(glow);
     }
-    if (equipped === 'excel' || equipped === 'dbs') {
-      // 刀身にExcelアイコンを浮かべる
+    if (equipped === 'excel') {
+      // 刀身にExcelアイコンを浮かべる（Excelソードのみ）
       const icon = new THREE.Sprite(new THREE.SpriteMaterial({ map: excelTex, transparent: true, depthTest: false }));
       icon.scale.setScalar(0.16);
       icon.position.set(0, 0.2, 0.05);
@@ -1723,7 +1723,7 @@ function applyPlayerGear(rp, eq, ar) {
     if (c.material && c.material.dispose) c.material.dispose();
   }
   if (eq && eq !== 'fist' && WEAPONS[eq]) {
-    const col = { wood: 0x9a7a52, stone: 0xc2c8ce, neon: 0x22d3ee, excel: 0x21a366, dbs: 0x107c41 }[eq] || 0xffffff;
+    const col = { wood: 0x9a7a52, stone: 0xc2c8ce, neon: 0x22d3ee, excel: 0x21a366, dbs: 0x2f7bff }[eq] || 0xffffff;
     const glowy = eq === 'neon' || eq === 'excel' || eq === 'dbs';
     const blade = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.55, 0.07),
       glowy ? new THREE.MeshBasicMaterial({ color: col }) : new THREE.MeshLambertMaterial({ color: col }));
@@ -1731,7 +1731,7 @@ function applyPlayerGear(rp, eq, ar) {
     const guard = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.05, 0.09), new THREE.MeshLambertMaterial({ color: 0x3b2a1a }));
     guard.position.y = 0.06;
     u.hand.add(blade, guard);
-    if (eq === 'excel' || eq === 'dbs') {
+    if (eq === 'excel') {
       const icon = new THREE.Sprite(new THREE.SpriteMaterial({ map: excelTex, transparent: true }));
       icon.scale.setScalar(0.2);
       icon.position.set(0, 0.45, 0);
