@@ -2343,9 +2343,15 @@ function buildMobMesh(type) {
     g.add(box(0.52, 0.32, 0.55, lam(dark2), 0, 0.32, 2.95));            // 鼻先
     g.add(box(0.16, 0.5, 0.16, lam(dark2), -0.3, 1.0, 2.2));            // 角
     g.add(box(0.16, 0.5, 0.16, lam(dark2), 0.3, 1.0, 2.2));
-    const e1 = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.13, 0.08), gm(0xe23bff));
-    e1.position.set(-0.32, 0.56, 2.66); g.add(e1);
-    const e2 = e1.clone(); e2.position.x = 0.32; g.add(e2);
+    // 紫の目（明るい本体＋外側のほのかな光）
+    const eyeC = 0xb026ff;
+    const e1 = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.2, 0.1), gm(eyeC));
+    e1.position.set(-0.3, 0.58, 2.74); g.add(e1);
+    const e2 = e1.clone(); e2.position.x = 0.3; g.add(e2);
+    const eg1 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.34, 0.12),
+      new THREE.MeshBasicMaterial({ color: eyeC, transparent: true, opacity: 0.28, depthWrite: false }));
+    eg1.position.set(-0.3, 0.58, 2.7); g.add(eg1);
+    const eg2 = eg1.clone(); eg2.position.x = 0.3; g.add(eg2);
     g.add(box(0.55, 0.5, 1.3, lam(body), 0, 0.05, -1.85));              // 尻尾
     g.add(box(0.32, 0.34, 1.2, lam(dark2), 0, 0.1, -2.95));
     g.add(box(0.5, 0.3, 0.5, lam(dark2), 0, 0.1, -3.6));                // 尾の先
@@ -2842,6 +2848,8 @@ function updateMobs(dt) {
           : (mob.enraged ? 0xff3b30 : 0xff7a2a);  // マグマ竜：橙⇄激怒赤
         for (const m of gm) m.color.setHex(col).multiplyScalar(p);
       }
+      // 黒炎オーラ（黒龍が身にまとう）
+      if (mob.type === 'blackdragon' && d < 60) spawnAura(mob.pos.x, mob.pos.y + 0.4, mob.pos.z, mob.enraged ? 3 : 2);
     } else {
       // ボス：激怒時のみ地上をのっしのっしと追ってくる
       mob.swingT = Math.max(0, mob.swingT - dt);
@@ -2904,6 +2912,36 @@ function updateMobs(dt) {
     mob.mesh.userData.barFg.position.x = -0.45 * (1 - ratio);
   }
 }
+/* ================= 黒龍の黒炎オーラ ================= */
+const auraParts = [];
+const auraGeo = new THREE.BoxGeometry(1, 1, 1);
+function spawnAura(x, y, z, n) {
+  if (auraParts.length > 90) return;
+  for (let i = 0; i < n; i++) {
+    const bright = Math.random() < 0.28; // 一部だけ紫に光らせて炎感を出す
+    const m = new THREE.Mesh(auraGeo, new THREE.MeshBasicMaterial({
+      color: bright ? 0xa020ff : 0x140320, transparent: true, opacity: 0.85, depthWrite: false,
+    }));
+    m.position.set(x + (Math.random() - 0.5) * 4.2, y + (Math.random() - 0.5) * 2.0, z + (Math.random() - 0.5) * 5.0);
+    m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+    const life = 0.45 + Math.random() * 0.5;
+    auraParts.push({ m, vel: new THREE.Vector3((Math.random() - 0.5) * 1.4, 1.4 + Math.random() * 1.8, (Math.random() - 0.5) * 1.4), life, max: life });
+    scene.add(m);
+  }
+}
+function updateAura(dt) {
+  for (let i = auraParts.length - 1; i >= 0; i--) {
+    const p = auraParts[i];
+    p.life -= dt;
+    if (p.life <= 0) { scene.remove(p.m); p.m.material.dispose(); auraParts.splice(i, 1); continue; }
+    p.m.position.addScaledVector(p.vel, dt);
+    p.m.rotation.x += dt * 2.4; p.m.rotation.y += dt * 1.8;
+    const k = p.life / p.max;
+    p.m.material.opacity = k * 0.8;
+    p.m.scale.setScalar(0.5 + (1 - k) * 0.9); // 立ち昇りながら膨らんで消える＝炎の揺らめき
+  }
+}
+
 /* ================= 火球（ドラゴンの遠距離攻撃） ================= */
 const fireballs = [];
 const fbGeom = new THREE.BoxGeometry(0.42, 0.42, 0.42);
@@ -3778,6 +3816,7 @@ function loop(now) {
     spawnTimer = 3;
   }
   updateFireballs(dt);
+  updateAura(dt);
   updateExcelShots(dt);
   updateRemoteShots(dt);
   updateIconParts(dt);
