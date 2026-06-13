@@ -86,6 +86,7 @@ python -m http.server 8765
         "changes": { ".read": true, ".write": "auth != null" },
         "bosses":  { ".read": true, ".write": "auth != null" },
         "chat":    { ".read": true, ".write": "auth != null" },
+        "beacon":  { ".read": true, ".write": "auth != null" },
         "online":  {
           ".read": true,
           "$uid": { ".write": "auth.uid === $uid" }

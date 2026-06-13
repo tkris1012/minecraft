@@ -178,6 +178,41 @@
     transition: width .25s; box-shadow: 0 0 12px rgba(244,63,94,0.5);
   }
 
+  /* ---- 集合ビーコン指示器 ---- */
+  #beaconHud {
+    position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 10;
+    pointer-events: none; display: none; align-items: center; gap: 7px;
+    background: var(--glass); border: 1px solid rgba(34,211,238,0.4);
+    backdrop-filter: blur(14px); border-radius: 999px; padding: 5px 13px;
+    color: #e7ecf5; font-size: 12px; font-weight: 600; letter-spacing: .04em;
+    box-shadow: 0 0 16px rgba(34,211,238,0.25);
+  }
+  #beaconHud.show { display: flex; }
+  #beaconHud .barrow { font-size: 15px; color: var(--accent); transition: transform .1s linear; display: inline-block; }
+  #beaconHud b { color: var(--accent); font-variant-numeric: tabular-nums; }
+
+  /* ---- 招待パネル ---- */
+  #invitePanel {
+    position: fixed; inset: 0; z-index: 26; display: none;
+    align-items: center; justify-content: center;
+    background: rgba(7,10,22,0.7); backdrop-filter: blur(10px);
+  }
+  #invitePanel.show { display: flex; }
+  #invitePanel .card { width: min(380px, 90vw); cursor: default; }
+  #invitePanel h2 {
+    font-size: 22px; letter-spacing: .12em; margin-bottom: 4px;
+    background: linear-gradient(92deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  #invitePanel .isub { font-size: 11px; color: rgba(255,255,255,0.45); letter-spacing: .1em; margin-bottom: 18px; }
+  #qrbox { width: 200px; height: 200px; margin: 0 auto 16px; background: #fff; border-radius: 12px; padding: 10px; }
+  #qrbox img { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+  #inviteUrl {
+    width: 100%; font-size: 11.5px; color: #cfe0ff; background: rgba(255,255,255,0.06);
+    border: 1px solid var(--glass-border); border-radius: 8px; padding: 8px 10px; margin-bottom: 12px;
+    text-align: center; word-break: break-all; font-family: inherit;
+  }
+
   /* ---- chat ---- */
   #chatlog {
     position: fixed; left: 16px; bottom: 96px; z-index: 10; pointer-events: none;
@@ -378,6 +413,17 @@
   <div class="bname"><span id="bossName">👑 古代ゴーレム</span><span class="bstate">PASSIVE</span></div>
   <div class="bwrap"><div class="bfill"></div></div>
 </div>
+<div id="beaconHud"><span class="barrow">▲</span> 🚩 集合 <b><span id="beaconDist">0</span>m</b></div>
+<div id="invitePanel">
+  <div class="card">
+    <h2>招待する</h2>
+    <div class="isub">同じワールドに友達を呼ぶ</div>
+    <div id="qrbox"></div>
+    <input id="inviteUrl" readonly>
+    <button class="btn" id="inviteCopy" style="width:100%;padding:12px 0;margin-bottom:8px">リンクをコピー</button>
+    <button class="btn ghost" id="inviteClose" style="width:100%;padding:11px 0">閉じる</button>
+  </div>
+</div>
 <div id="chatlog"></div>
 <div id="chatinput"></div>
 <input id="mobileChatInput" type="text" maxlength="120" placeholder="メッセージを入力…" autocomplete="off">
@@ -390,6 +436,7 @@
   <div id="btnFly" class="tbtn">✈️</div>
   <div id="btnCraft" class="tbtn">⚒️</div>
   <div id="btnChat" class="tbtn">💬</div>
+  <div id="btnBeacon" class="tbtn">🚩</div>
   <div id="btnPause" class="tbtn">⏸</div>
 </div>
 
@@ -407,6 +454,8 @@
       <span><b>1–9 / ホイール</b>ブロック選択</span>
       <span><b>E</b>クラフト・装備</span>
       <span><b>Q</b>焼き肉を食べる</span>
+      <span><b>Enter/T</b>チャット</span>
+      <span><b>B</b>集合ビーコン</span>
       <span><b>F</b>飛行モード切替</span>
       <span><b>C</b>（飛行中）下降</span>
     </div>
@@ -415,6 +464,7 @@
       <div id="loadtext">ワールド生成中…</div>
     </div>
     <div id="playhint" style="display:none">クリックでスタート</div>
+    <button class="btn ghost" id="inviteBtn" style="margin-top:14px;width:100%;padding:11px 0">🔗 友達を招待（QR）</button>
   </div>
 </div>
 
@@ -955,6 +1005,8 @@ const syncAdapter = {
   onBossState(cb) { this._bossCb = cb; }, // 共有ボス状態の購読（接続時に本物へ差し替え）
   sendChat(m) { /* 接続時に本物へ差し替え */ },
   onChat(cb) { this._chatCb = cb; },
+  sendBeacon(b) { if (this._beaconCb) this._beaconCb(b); }, // オフラインはローカル反映のみ
+  onBeacon(cb) { this._beaconCb = cb; },
   // テスト用：リモートからの受信をシミュレート
   simulateRemoteAction(a) { if (this._actionCb) this._actionCb(a); },
   simulateRemotePresence(p) { if (this._presenceCb) this._presenceCb(p); },
@@ -1971,6 +2023,59 @@ function chatKey(e) {
   inp.addEventListener('blur', () => inp.classList.remove('show'));
 }
 
+/* ================= 集合ビーコン ================= */
+let beacon = null; // { x, y, z, by, t }
+let beaconPillar = null;
+const BEACON_TTL = 180; // 秒
+function buildBeaconPillar() {
+  const g = new THREE.Group();
+  const beam = new THREE.Mesh(
+    new THREE.BoxGeometry(0.7, H + 30, 0.7),
+    new THREE.MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.28, depthWrite: false })
+  );
+  beam.position.y = (H + 30) / 2;
+  const core = new THREE.Mesh(
+    new THREE.BoxGeometry(0.22, H + 30, 0.22),
+    new THREE.MeshBasicMaterial({ color: 0xbdf3ff, transparent: true, opacity: 0.85, depthWrite: false })
+  );
+  core.position.y = (H + 30) / 2;
+  g.add(beam, core);
+  g.frustumCulled = false;
+  scene.add(g);
+  return g;
+}
+function setBeacon() {
+  if (!playing || dead) return;
+  const b = { x: Math.floor(player.pos.x) + 0.5, y: 0, z: Math.floor(player.pos.z) + 0.5, by: myName(), t: Date.now() };
+  applyBeacon(b); // 即ローカル反映（送信失敗でも見える）
+  if (syncAdapter.connected) syncAdapter.sendBeacon(b);
+  blip(880, 0.12, 'sine', 0.06, 1.2);
+  toast('🚩 集合ビーコンを設置した');
+}
+function applyBeacon(b) {
+  beacon = b;
+  if (b) {
+    if (!beaconPillar) beaconPillar = buildBeaconPillar();
+    beaconPillar.position.set(b.x, 0, b.z);
+    beaconPillar.visible = true;
+    if (b.by && b.by !== myName()) toast(`🚩 <b>${escHtml(b.by)}</b>が集合ビーコンを立てた！`);
+  } else if (beaconPillar) beaconPillar.visible = false;
+}
+syncAdapter.onBeacon(applyBeacon);
+const _bv = new THREE.Vector3();
+function updateBeaconHud() {
+  const hud = document.getElementById('beaconHud');
+  if (beacon && (Date.now() - beacon.t) / 1000 > BEACON_TTL) applyBeacon(null); // 期限切れ
+  if (!beacon || !playing) { hud.classList.remove('show'); return; }
+  const dx = beacon.x - player.pos.x, dz = beacon.z - player.pos.z;
+  const dist = Math.round(Math.hypot(dx, dz));
+  document.getElementById('beaconDist').textContent = dist;
+  const bearing = Math.atan2(dx, dz);          // ワールド方位
+  const rel = bearing - player.yaw + Math.PI;  // プレイヤー基準（▲が上＝正面）
+  hud.querySelector('.barrow').style.transform = `rotate(${rel}rad)`;
+  hud.classList.add('show');
+}
+
 /* ================= ザコ敵 ================= */
 const mobs = [];
 const MOB_TYPES = {
@@ -2751,6 +2856,35 @@ card.addEventListener('click', () => {
   if (IS_TOUCH) startGame();
   else renderer.domElement.requestPointerLock();
 });
+
+/* ---- 招待（リンク＋QR） ---- */
+function inviteUrl() {
+  return location.origin + location.pathname + '?seed=' + WORLD_SEED;
+}
+function openInvite() {
+  const url = inviteUrl();
+  document.getElementById('inviteUrl').value = url;
+  document.getElementById('qrbox').innerHTML =
+    `<img alt="QR" src="https://api.qrserver.com/v1/create-qr-code/?size=360x360&margin=0&data=${encodeURIComponent(url)}" onerror="this.style.display='none'">`;
+  document.getElementById('invitePanel').classList.add('show');
+}
+function closeInvite() { document.getElementById('invitePanel').classList.remove('show'); }
+const inviteBtn = document.getElementById('inviteBtn');
+if (inviteBtn) inviteBtn.addEventListener('click', e => { e.stopPropagation(); openInvite(); });
+document.getElementById('inviteClose').addEventListener('click', closeInvite);
+document.getElementById('invitePanel').addEventListener('click', e => { if (e.target.id === 'invitePanel') closeInvite(); });
+document.getElementById('inviteCopy').addEventListener('click', async () => {
+  const btn = document.getElementById('inviteCopy');
+  try {
+    await navigator.clipboard.writeText(inviteUrl());
+    btn.textContent = 'コピーしました！';
+  } catch (e) {
+    const inp = document.getElementById('inviteUrl');
+    inp.select(); document.execCommand('copy');
+    btn.textContent = 'コピーしました！';
+  }
+  setTimeout(() => { btn.textContent = 'リンクをコピー'; }, 1600);
+});
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === renderer.domElement;
   if (!IS_TOUCH) playing = locked;
@@ -2779,6 +2913,7 @@ document.addEventListener('keydown', e => {
   }
   if (e.code === 'KeyF' && playing) { player.fly = !player.fly; player.vel.y = 0; blip(player.fly ? 700 : 400, 0.1, 'sine', 0.05, 1.2); }
   if (e.code === 'KeyQ' && playing && !dead) eatFood();
+  if (e.code === 'KeyB' && playing && !dead) setBeacon();
   if (/^Digit[1-9]$/.test(e.code)) { selected = +e.code.slice(5) - 1; renderHotbar(); }
 });
 document.addEventListener('keyup', e => keys[e.code] = false);
@@ -2979,6 +3114,7 @@ if (IS_TOUCH) {
   bindBtn('btnFly',    () => { if (playing) { player.fly = !player.fly; player.vel.y = 0; blip(player.fly ? 700 : 400, 0.1, 'sine', 0.05, 1.2); } });
   bindBtn('btnCraft',  () => { if (!dead && worldReady) craftOpen ? closeCraft() : openCraft(); });
   bindBtn('btnChat',   () => { if (!dead && playing) openChat(); });
+  bindBtn('btnBeacon', () => { if (!dead && playing) setBeacon(); });
   bindBtn('btnPause',  () => { playing = false; applyHud(); });
 }
 addEventListener('resize', () => {
@@ -3214,6 +3350,11 @@ async function initFirebase() {
       for (const id of [...remotePlayers.keys()])
         if (id.indexOf('dummy-') !== 0 && !seen.has(id)) removeRemotePlayer(id);
     });
+    // --- 集合ビーコン ---
+    const beaconRef = ref(db, `worlds/${worldId}/beacon`);
+    syncAdapter.sendBeacon = b => set(beaconRef, b);
+    onValue(beaconRef, snap => { if (syncAdapter._beaconCb) syncAdapter._beaconCb(snap.val()); });
+
     // --- チャット ---
     const chatRef = ref(db, `worlds/${worldId}/chat`);
     syncAdapter.sendChat = m => push(chatRef, { uid, name: m.name, msg: m.msg, t: Date.now() });
@@ -3337,6 +3478,7 @@ window.NC = {
   renderPlayerList, fireExcelShot, iconBurst, tryMobAttack, excelBlueTex,
   applyBossState, bossState: () => sharedBossState,
   sendChat, openChat, closeChat, onChatMessage,
+  setBeacon, applyBeacon, openInvite, getBeacon: () => beacon,
   excelShots: () => excelShots.length, iconParts: () => iconParts.length,
   // ダミーのリモートプレイヤーを1体スポーンして円を描いて歩かせる（同期土台の動作確認用）
   spawnDummyPlayer: () => {
@@ -3376,6 +3518,7 @@ function loop(now) {
   if (playing && !dead) physics(dt);
   if (worldReady) updateMobs(dt);
   updateRemotePlayers(dt);
+  updateBeaconHud();
   if (playing) presenceTick(dt);
   updateDay(dt);
   updateParticles(dt);
