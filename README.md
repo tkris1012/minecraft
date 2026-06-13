@@ -84,6 +84,7 @@ python -m http.server 8765
       "$world": {
         "seed":    { ".read": true, ".write": "auth != null" },
         "changes": { ".read": true, ".write": "auth != null" },
+        "bosses":  { ".read": true, ".write": "auth != null" },
         "online":  {
           ".read": true,
           "$uid": { ".write": "auth.uid === $uid" }

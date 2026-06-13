@@ -920,6 +920,7 @@ const syncAdapter = {
   sendPresence(p) { /* TODO: worlds/{id}/online/{uid} へ書き込み（毎秒4回に間引き済み） */ },
   onRemoteAction(cb) { this._actionCb = cb; },
   onRemotePresence(cb) { this._presenceCb = cb; },
+  onBossState(cb) { this._bossCb = cb; }, // 共有ボス状態の購読（接続時に本物へ差し替え）
   // テスト用：リモートからの受信をシミュレート
   simulateRemoteAction(a) { if (this._actionCb) this._actionCb(a); },
   simulateRemotePresence(p) { if (this._presenceCb) this._presenceCb(p); },
@@ -1379,9 +1380,11 @@ document.getElementById('respawnBtn').addEventListener('click', () => {
   player.pos.copy(spawnPoint);
   player.vel.set(0, 0, 0);
   renderHearts();
-  // ボスは鎮まり、全回復する
-  if (boss) { boss.enraged = false; boss.hp = boss.maxHp; }
-  if (dragon) { dragon.enraged = false; dragon.hp = dragon.maxHp; dragon.pos.copy(dragon.home); }
+  // ボスは鎮まり、全回復する（共有ボスは1人の死で鎮まらせない）
+  if (!syncAdapter.connected) {
+    if (boss) { boss.enraged = false; boss.hp = boss.maxHp; }
+    if (dragon) { dragon.enraged = false; dragon.hp = dragon.maxHp; dragon.pos.copy(dragon.home); }
+  } else if (dragon) { dragon.pos.copy(dragon.home); }
   document.getElementById('deathPanel').classList.remove('show');
   if (IS_TOUCH) { playing = true; applyHud(); }
   else renderer.domElement.requestPointerLock();
@@ -2140,18 +2143,23 @@ function trySpawnMob() {
     return;
   }
 }
+const bossKind = mob => mob.type === 'boss' ? 'golem' : mob.type === 'dragon' ? 'dragon' : null;
+function enrageToast(mob) {
+  toast(`${mob.type === 'dragon' ? '🐉' : '👑'} <b>${mob.t.name}</b>が激怒した！`);
+  blip(60, 0.6, 'sawtooth', 0.1, 0.5);
+  setTimeout(() => blip(45, 0.7, 'sawtooth', 0.09, 0.6), 200);
+}
 function hurtMob(mob, dmg, fromDir) {
-  mob.hp -= dmg;
   mob.flashT = 1;
   blip(95, 0.08, 'sawtooth', 0.06, 0.7);
   const isBossType = mob.type === 'boss' || mob.type === 'dragon';
-  if (isBossType && !mob.enraged && mob.hp > 0) {
-    // 手を出すと激怒する
-    mob.enraged = true;
-    toast(`${mob.type === 'dragon' ? '🐉' : '👑'} <b>${mob.t.name}</b>が激怒した！`);
-    blip(60, 0.6, 'sawtooth', 0.1, 0.5);
-    setTimeout(() => blip(45, 0.7, 'sawtooth', 0.09, 0.6), 200);
+  // 共有ワールドボス：HP/激怒/撃破はFirebase経由（全員で削る共闘）
+  if (isBossType && syncAdapter.connected && syncAdapter.damageBoss) {
+    syncAdapter.damageBoss(bossKind(mob), dmg);
+    return;
   }
+  mob.hp -= dmg;
+  if (isBossType && !mob.enraged && mob.hp > 0) { mob.enraged = true; enrageToast(mob); } // 手を出すと激怒
   if (fromDir && !isBossType) {
     mob.vel.x += fromDir.x * 6;
     mob.vel.z += fromDir.z * 6;
@@ -2160,6 +2168,27 @@ function hurtMob(mob, dmg, fromDir) {
   if (mob.type === 'pig') mob.fleeT = 2.5; // ブタは叩かれると逃げる
   if (mob.hp <= 0) killMob(mob);
 }
+// 共有ボス状態をローカルに反映（HP/激怒/撃破/復活）
+let sharedBossState = {};
+function applyBossState(state) {
+  sharedBossState = state || {};
+  for (const kind of ['golem', 'dragon']) {
+    const s = sharedBossState[kind];
+    if (!s) continue;
+    let mob = kind === 'golem' ? boss : dragon;
+    if (s.dead) {
+      if (mob) killMob(mob); // 全員の画面で討伐演出＋報酬
+      if (Date.now() - (s.deadAt || 0) > 30000 && syncAdapter.reviveBoss) syncAdapter.reviveBoss(kind);
+    } else {
+      if (!mob && worldReady) { kind === 'golem' ? spawnBoss() : spawnDragon(); mob = kind === 'golem' ? boss : dragon; }
+      if (mob) {
+        if (!mob.enraged && s.enraged) enrageToast(mob); // 激怒に切り替わった瞬間に通知
+        mob.hp = s.hp; mob.enraged = s.enraged; mob.maxHp = s.max || mob.maxHp;
+      }
+    }
+  }
+}
+syncAdapter.onBossState(applyBossState);
 function killMob(mob) {
   const i = mobs.indexOf(mob);
   if (i < 0) return;
@@ -2941,6 +2970,7 @@ function chunkTick() {
       for (let i = 0; i < 6; i++) trySpawnMob();
       spawnBoss();
       spawnDragon();
+      applyBossState(sharedBossState); // 接続済みなら共有HPを即反映
     }
   }
 }
@@ -2996,7 +3026,7 @@ async function initFirebase() {
       import(`https://www.gstatic.com/firebasejs/${V}/firebase-database.js`),
       import(`https://www.gstatic.com/firebasejs/${V}/firebase-auth.js`),
     ]);
-    const { getDatabase, ref, set, onChildAdded, onChildChanged, onValue, onDisconnect } = dbm;
+    const { getDatabase, ref, set, onChildAdded, onChildChanged, onValue, onDisconnect, runTransaction } = dbm;
     const app = initializeApp(FIREBASE_CONFIG);
     const db = getDatabase(app);
     const cred = await signInAnonymously(getAuth(app));
@@ -3060,6 +3090,38 @@ async function initFirebase() {
         if (id.indexOf('dummy-') !== 0 && !seen.has(id)) removeRemotePlayer(id);
     });
     syncAdapter.connected = true;
+
+    // --- 共有ワールドボス（HP/激怒/撃破/復活を全員で同期） ---
+    // bossesノードへの書き込み権限が無い（ルール未更新）場合は従来の個別ボスにフォールバック
+    const BOSS_MAX = { golem: 60, dragon: 80 };
+    const bRef = k => ref(db, `worlds/${worldId}/bosses/${k}`);
+    try {
+      await runTransaction(bRef('golem'), cur => cur || { hp: BOSS_MAX.golem, max: BOSS_MAX.golem, enraged: false, dead: false, deadAt: 0 });
+      await runTransaction(bRef('dragon'), cur => cur || { hp: BOSS_MAX.dragon, max: BOSS_MAX.dragon, enraged: false, dead: false, deadAt: 0 });
+      syncAdapter.damageBoss = (k, dmg) => {
+        runTransaction(bRef(k), cur => {
+          if (!cur) return { hp: Math.max(0, BOSS_MAX[k] - dmg), max: BOSS_MAX[k], enraged: true, dead: BOSS_MAX[k] - dmg <= 0, deadAt: BOSS_MAX[k] - dmg <= 0 ? Date.now() : 0 };
+          if (cur.dead) return; // 撃破済みは無視（トランザクション中断）
+          cur.hp = Math.max(0, cur.hp - dmg);
+          cur.enraged = true;
+          if (cur.hp <= 0) { cur.dead = true; cur.deadAt = Date.now(); }
+          return cur;
+        });
+      };
+      syncAdapter.reviveBoss = k => {
+        runTransaction(bRef(k), cur => {
+          if (cur && cur.dead && Date.now() - (cur.deadAt || 0) > 30000)
+            return { hp: BOSS_MAX[k], max: BOSS_MAX[k], enraged: false, dead: false, deadAt: 0 };
+          return; // 中断（最初の1人だけが復活させる）
+        });
+      };
+      onValue(ref(db, `worlds/${worldId}/bosses`), snap => {
+        if (syncAdapter._bossCb) syncAdapter._bossCb(snap.val() || {});
+      });
+    } catch (e) {
+      console.warn('共有ボス無効（セキュリティルール未更新の可能性）。個別ボスで継続:', e);
+    }
+
     toast(`🌐 <b>${name}</b> としてワールド ${worldId} に参加した！`);
   } catch (e) {
     console.warn('Firebase接続失敗:', e);
@@ -3067,6 +3129,14 @@ async function initFirebase() {
   }
 }
 initFirebase();
+// 共有ボスの復活チェック（onValueが鳴らない待機中も定期的に判定）
+setInterval(() => {
+  if (!syncAdapter.connected || !syncAdapter.reviveBoss) return;
+  for (const k of ['golem', 'dragon']) {
+    const s = sharedBossState[k];
+    if (s && s.dead && Date.now() - (s.deadAt || 0) > 30000) syncAdapter.reviveBoss(k);
+  }
+}, 3000);
 
 /* ================= セーブ/ロード =================
    「シード＋差分(changes)」方式。フェーズ3のFirebase構造
@@ -3131,6 +3201,7 @@ window.NC = {
   ownedTools, TOOLS, ownedArmor, armorCount, breakTime, setHold: v => { holdL = v; },
   saveGame, loadGame, clearSave: () => localStorage.removeItem(SAVE_KEY),
   renderPlayerList, fireExcelShot, iconBurst, tryMobAttack, excelBlueTex,
+  applyBossState, bossState: () => sharedBossState,
   excelShots: () => excelShots.length, iconParts: () => iconParts.length,
   // ダミーのリモートプレイヤーを1体スポーンして円を描いて歩かせる（同期土台の動作確認用）
   spawnDummyPlayer: () => {
