@@ -178,6 +178,34 @@
     transition: width .25s; box-shadow: 0 0 12px rgba(244,63,94,0.5);
   }
 
+  /* ---- chat ---- */
+  #chatlog {
+    position: fixed; left: 16px; bottom: 96px; z-index: 10; pointer-events: none;
+    max-width: 46vw; display: flex; flex-direction: column; gap: 3px;
+  }
+  #chatlog .cl {
+    background: rgba(10,14,31,0.5); border-radius: 8px; padding: 3px 9px;
+    font-size: 12.5px; color: #e7ecf5; align-self: flex-start; max-width: 100%;
+    word-break: break-word; transition: opacity .6s;
+  }
+  #chatlog .cl b { color: var(--accent); }
+  #chatinput {
+    position: fixed; left: 16px; bottom: 64px; z-index: 14; display: none;
+    background: var(--glass); border: 1px solid var(--accent); border-radius: 9px;
+    padding: 7px 11px; font-size: 13.5px; color: #fff; min-width: 320px; max-width: 72vw;
+    backdrop-filter: blur(14px); font-family: inherit;
+  }
+  #chatinput.show { display: block; }
+  #chatinput .cw { color: rgba(255,255,255,0.45); }
+  #chatinput .cc { display: inline-block; width: 7px; background: var(--accent); animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  #mobileChatInput {
+    position: fixed; left: 16px; bottom: 64px; z-index: 14; display: none;
+    width: 72vw; padding: 9px 12px; font-size: 15px; border-radius: 9px;
+    border: 1px solid var(--accent); background: rgba(10,14,31,0.92); color: #fff; font-family: inherit;
+  }
+  #mobileChatInput.show { display: block; }
+
   /* ---- touch UI ---- */
   #touchui { display: none; position: fixed; inset: 0; z-index: 12; pointer-events: none; }
   #touchui > * { pointer-events: auto; }
@@ -350,6 +378,9 @@
   <div class="bname"><span id="bossName">👑 古代ゴーレム</span><span class="bstate">PASSIVE</span></div>
   <div class="bwrap"><div class="bfill"></div></div>
 </div>
+<div id="chatlog"></div>
+<div id="chatinput"></div>
+<input id="mobileChatInput" type="text" maxlength="120" placeholder="メッセージを入力…" autocomplete="off">
 <div id="touchui">
   <div id="stickArea"><div id="stickNub"></div></div>
   <div id="btnAttack" class="tbtn">⚔️</div>
@@ -358,6 +389,7 @@
   <div id="btnDown" class="tbtn">⬇️</div>
   <div id="btnFly" class="tbtn">✈️</div>
   <div id="btnCraft" class="tbtn">⚒️</div>
+  <div id="btnChat" class="tbtn">💬</div>
   <div id="btnPause" class="tbtn">⏸</div>
 </div>
 
@@ -921,6 +953,8 @@ const syncAdapter = {
   onRemoteAction(cb) { this._actionCb = cb; },
   onRemotePresence(cb) { this._presenceCb = cb; },
   onBossState(cb) { this._bossCb = cb; }, // 共有ボス状態の購読（接続時に本物へ差し替え）
+  sendChat(m) { /* 接続時に本物へ差し替え */ },
+  onChat(cb) { this._chatCb = cb; },
   // テスト用：リモートからの受信をシミュレート
   simulateRemoteAction(a) { if (this._actionCb) this._actionCb(a); },
   simulateRemotePresence(p) { if (this._presenceCb) this._presenceCb(p); },
@@ -1829,6 +1863,12 @@ function updateRemotePlayers(dt) {
       L.armR.rotation.x = sw;
       rp.mesh.userData.hand.rotation.x = -0.6;
     }
+    // チャット吹き出しのフェードアウト
+    if (rp.bubble) {
+      rp.bubbleT -= dt;
+      if (rp.bubbleT <= 0) { rp.mesh.remove(rp.bubble); rp.bubble.material.map.dispose(); rp.bubble.material.dispose(); rp.bubble = null; }
+      else rp.bubble.material.opacity = Math.min(1, rp.bubbleT);
+    }
   }
 }
 syncAdapter.onRemotePresence(p => upsertRemotePlayer(p));
@@ -1851,6 +1891,84 @@ function presenceTick(dt) {
     if (lastFx.kind === 'excel') { pr.fdx = +lastFx.dx.toFixed(2); pr.fdy = +lastFx.dy.toFixed(2); pr.fdz = +lastFx.dz.toFixed(2); }
   }
   syncAdapter.sendPresence(pr);
+}
+
+/* ================= チャット ================= */
+let chatOpen = false, chatBuf = '';
+const myName = () => localStorage.getItem('neocraft_name') || 'あなた';
+function addChatLine(name, msg) {
+  const log = document.getElementById('chatlog');
+  const el = document.createElement('div');
+  el.className = 'cl';
+  el.innerHTML = `<b>${escHtml(name)}</b> ${escHtml(msg)}`;
+  log.appendChild(el);
+  while (log.children.length > 7) log.removeChild(log.firstChild);
+  setTimeout(() => { el.style.opacity = '0'; }, 8000);
+  setTimeout(() => { if (el.parentNode) el.remove(); }, 8700);
+}
+// 送信者の頭上に吹き出しを出す（リモートプレイヤーのみ）
+function showChatBubble(uid, msg) {
+  const rp = remotePlayers.get(uid);
+  if (!rp) return;
+  if (rp.bubble) { rp.mesh.remove(rp.bubble); rp.bubble.material.map.dispose(); rp.bubble.material.dispose(); }
+  const cv = document.createElement('canvas');
+  cv.width = 256; cv.height = 64;
+  const ctx = cv.getContext('2d');
+  ctx.font = 'bold 26px sans-serif';
+  const text = msg.length > 16 ? msg.slice(0, 15) + '…' : msg;
+  const w = Math.min(252, ctx.measureText(text).width + 28);
+  ctx.fillStyle = 'rgba(10,14,31,0.82)';
+  ctx.beginPath(); ctx.roundRect((256 - w) / 2, 8, w, 44, 12); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, 128, 31);
+  const tex = new THREE.CanvasTexture(cv);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  sp.scale.set(2.0, 0.5, 1); sp.position.y = 2.5; sp.renderOrder = 13;
+  rp.mesh.add(sp);
+  rp.bubble = sp; rp.bubbleT = 5;
+}
+function onChatMessage(m) {
+  if (m.uid && m.uid === syncAdapter.uid) return; // 自分の発言は送信時に表示済み
+  addChatLine(m.name || 'Player', m.msg);
+  if (m.uid) showChatBubble(m.uid, m.msg);
+}
+syncAdapter.onChat(onChatMessage);
+function sendChat(text) {
+  text = (text || '').trim().slice(0, 120);
+  if (!text) return;
+  addChatLine(myName(), text); // 自分の発言は即表示（送信失敗でも見える）
+  if (syncAdapter.connected) syncAdapter.sendChat({ uid: syncAdapter.uid, name: myName(), msg: text });
+}
+function updateChatInput() {
+  const el = document.getElementById('chatinput');
+  el.classList.toggle('show', chatOpen);
+  if (chatOpen) el.innerHTML = `<span class="cw">＞</span> ${escHtml(chatBuf)}<span class="cc">&nbsp;</span>`;
+}
+function openChat() {
+  if (!playing || craftOpen || dead || chatOpen) return;
+  if (IS_TOUCH) {
+    const inp = document.getElementById('mobileChatInput');
+    inp.classList.add('show'); inp.value = ''; inp.focus();
+  } else {
+    chatOpen = true; chatBuf = ''; updateChatInput();
+  }
+}
+function closeChat() { chatOpen = false; chatBuf = ''; updateChatInput(); }
+// PC：ポインターロックを維持したままキー入力を拾う（ゲームを止めない）
+function chatKey(e) {
+  if (!chatOpen) return false;
+  e.preventDefault();
+  if (e.code === 'Enter') { sendChat(chatBuf); closeChat(); }
+  else if (e.code === 'Escape') closeChat();
+  else if (e.code === 'Backspace') { chatBuf = chatBuf.slice(0, -1); updateChatInput(); }
+  else if (e.key && e.key.length === 1 && chatBuf.length < 120) { chatBuf += e.key; updateChatInput(); }
+  return true;
+}
+// モバイル入力
+{
+  const inp = document.getElementById('mobileChatInput');
+  inp.addEventListener('keydown', e => { if (e.code === 'Enter') { sendChat(inp.value); inp.value = ''; inp.classList.remove('show'); inp.blur(); } });
+  inp.addEventListener('blur', () => inp.classList.remove('show'));
 }
 
 /* ================= ザコ敵 ================= */
@@ -2647,6 +2765,11 @@ document.addEventListener('mousemove', e => {
   player.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, player.pitch));
 });
 document.addEventListener('keydown', e => {
+  // チャット入力中はゲーム操作より優先してキーを拾う（ポインターロックは維持）
+  if (chatOpen) { chatKey(e); return; }
+  if ((e.code === 'Enter' || e.code === 'KeyT') && playing && !craftOpen && !dead) {
+    openChat(); for (const k in keys) keys[k] = false; e.preventDefault(); return;
+  }
   keys[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
   if (e.code === 'KeyE' && !dead && worldReady) {
@@ -2855,6 +2978,7 @@ if (IS_TOUCH) {
   bindBtn('btnDown',   () => keys['KeyC'] = true,  () => keys['KeyC'] = false);
   bindBtn('btnFly',    () => { if (playing) { player.fly = !player.fly; player.vel.y = 0; blip(player.fly ? 700 : 400, 0.1, 'sine', 0.05, 1.2); } });
   bindBtn('btnCraft',  () => { if (!dead && worldReady) craftOpen ? closeCraft() : openCraft(); });
+  bindBtn('btnChat',   () => { if (!dead && playing) openChat(); });
   bindBtn('btnPause',  () => { playing = false; applyHud(); });
 }
 addEventListener('resize', () => {
@@ -3026,11 +3150,12 @@ async function initFirebase() {
       import(`https://www.gstatic.com/firebasejs/${V}/firebase-database.js`),
       import(`https://www.gstatic.com/firebasejs/${V}/firebase-auth.js`),
     ]);
-    const { getDatabase, ref, set, onChildAdded, onChildChanged, onValue, onDisconnect, runTransaction } = dbm;
+    const { getDatabase, ref, set, push, query, limitToLast, onChildAdded, onChildChanged, onValue, onDisconnect, runTransaction } = dbm;
     const app = initializeApp(FIREBASE_CONFIG);
     const db = getDatabase(app);
     const cred = await signInAnonymously(getAuth(app));
     const uid = cred.user.uid;
+    syncAdapter.uid = uid;
     const worldId = `world_${WORLD_SEED}`;
     let name = localStorage.getItem('neocraft_name');
     if (!name) {
@@ -3088,6 +3213,15 @@ async function initFirebase() {
       });
       for (const id of [...remotePlayers.keys()])
         if (id.indexOf('dummy-') !== 0 && !seen.has(id)) removeRemotePlayer(id);
+    });
+    // --- チャット ---
+    const chatRef = ref(db, `worlds/${worldId}/chat`);
+    syncAdapter.sendChat = m => push(chatRef, { uid, name: m.name, msg: m.msg, t: Date.now() });
+    const joinT = Date.now();
+    onChildAdded(query(chatRef, limitToLast(40)), snap => {
+      const m = snap.val();
+      if (!m || (m.t && m.t < joinT - 8000)) return; // 参加前の古いログは出さない
+      if (syncAdapter._chatCb) syncAdapter._chatCb(m);
     });
     syncAdapter.connected = true;
 
@@ -3202,6 +3336,7 @@ window.NC = {
   saveGame, loadGame, clearSave: () => localStorage.removeItem(SAVE_KEY),
   renderPlayerList, fireExcelShot, iconBurst, tryMobAttack, excelBlueTex,
   applyBossState, bossState: () => sharedBossState,
+  sendChat, openChat, closeChat, onChatMessage,
   excelShots: () => excelShots.length, iconParts: () => iconParts.length,
   // ダミーのリモートプレイヤーを1体スポーンして円を描いて歩かせる（同期土台の動作確認用）
   spawnDummyPlayer: () => {
